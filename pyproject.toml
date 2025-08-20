@@ -8,7 +8,10 @@ license = { text = "MIT" }
 authors = [
   { name = "Viraat Das", email = "viraat@exla.ai" }
 ]
-dependencies = []
+dependencies = [
+  "torch>=2.0.0",
+  "numpy>=1.21.0",
+]
 
 [project.optional-dependencies]
 dev = [

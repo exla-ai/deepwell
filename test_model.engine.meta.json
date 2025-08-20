@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "sm_version": 100,
+  "precision": "mxfp8",
+  "kernel_summary": {
+    "torch": 123
+  },
+  "estimated_memory_gb": 0.4529848319999998,
+  "estimated_flops": 528280977408
+}
