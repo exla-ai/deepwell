@@ -47,6 +47,53 @@ artifact = dw.export(engine, path="llama70b_b200.engine")
 
 ```
 
+## Install & develop with uv
+
+```bash
+uv venv --python 3.13
+source .venv/bin/activate
+uv sync --all-extras --dev
+```
+
+## Testing & TDD
+
+- Write a failing test first in `tests/`, then implement the minimal code to make it pass.
+- Default local run:
+```bash
+uv run pytest -q
+```
+- Mark GPU-only or slow tests so they can be skipped locally:
+```python
+import pytest
+
+@pytest.mark.gpu
+def test_gpu_only_case():
+    ...
+
+@pytest.mark.slow
+def test_long_benchmark():
+    ...
+```
+- To run without GPU/slow:
+```bash
+uv run pytest -q -m "not gpu and not slow"
+```
+
+## Publishing (TestPyPI / PyPI) with uv
+
+- Build wheel and sdist:
+```bash
+uv build
+```
+- Publish to TestPyPI (set `UV_PUBLISH_TOKEN` env var):
+```bash
+uv publish --repository testpypi
+```
+- Publish to PyPI:
+```bash
+uv publish
+```
+
 ## Why are we building this? 
 - Blackwell 5th‑gen Tensor Cores introduce MXFP8 and NVFP4/FP4 with microscaling. Vanilla PyTorch lacks the graph‑level planner or automatic precision fallback. Deepwell bridges that.
 - CUTLASS exposes Blackwell kernels (`tcgen05.mma`, grouped GEMM) but leaves integration and orchestration to users. Deepwell provides a full training scaffold.
