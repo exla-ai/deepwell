@@ -136,7 +136,7 @@ deepwell/
   - Accept: microbench shows MXFP8 path runs and produces close outputs vs BF16 on random input.
 
 - CUTLASS SM100 grouped GEMM
-  - Build a minimal PyTorch extension for grouped GEMM with block‑scaled FP8 and hooks for TMEM‑friendly epilogues. Start with CUTLASS example shapes. (GitHub)
+  - Build a minimal PyTorch extension for grouped GEMM with block‑scaled MXFP8 and hooks for TMEM‑friendly epilogues. Start with CUTLASS example shapes. (GitHub)
   - Accept: forward + backward against PyTorch reference within tolerance; throughput beats cuBLASLt grouped‑GEMM baseline for those shapes. (NVIDIA Developer)
 
 - autoplan() v0
@@ -187,7 +187,7 @@ Extras to add (next docs sections):
 - **MoE Cookbook**: grouped‑GEMM configs, router losses, capacity factors; Hopper→Blackwell migration notes.
 - **Kernel Notes**: `tcgen05.mma` (SM100), TMEM residency, epilogue fusion pointers to CUTLASS examples; arch strings `blackwell-sm100|sm120`.
 
-## Immediate TODOs (one week of focused work)
+## Immediate TODOs 
 
 - Boot `probe()` with NVML and NCCL topo dump.
 - FX `capture()` plus IR nodes and tags.
