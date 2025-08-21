@@ -25,6 +25,14 @@ namespace deepwell {
         cudaStream_t stream
     );
     
+    // Production kernel with correctness fix
+    void launch_production_gemm(
+        void* C, const void* A, const void* B,
+        int M, int N, int K,
+        float alpha, float beta,
+        cudaStream_t stream
+    );
+    
     void launch_quantize_mxfp8(
         void* output, void* scale_output, const float* input,
         int num_elements, cudaStream_t stream
@@ -180,11 +188,9 @@ void BlackwellGemmKernel::gemm(
         cudaMemset(scale_a, 0x3f800000, scale_size_a);  // IEEE 754 for 1.0f
         cudaMemset(scale_b, 0x3f800000, scale_size_b);
         
-        // Call our Blackwell MXFP8 GEMM kernel
-        // Use Blackwell optimized kernel
-        launch_blackwell_mxfp8_gemm(
+        // Use production kernel with correctness fix
+        launch_production_gemm(
             d, a, b,
-            scale_a, scale_b,
             pImpl->problem.m, pImpl->problem.n, pImpl->problem.k,
             epilogue.alpha, epilogue.beta,
             stream

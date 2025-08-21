@@ -41,18 +41,25 @@ void launch_blackwell_mxfp8_gemm(
     // 3. Execute block-scaled matrix multiply
     
     // Use cuBLAS GEMM for BF16
-    // PyTorch uses row-major layout, cuBLAS expects column-major
-    // For row-major: D = A * B where A is MxK, B is KxN, D is MxN
-    // We use the identity: row_major(D = A*B) = col_major(D^T = B^T*A^T)
+    // CRITICAL: Get the layout right for correctness!
+    // PyTorch: Row-major, cuBLAS: Column-major
+    //
+    // We want: D = A * B where:
+    //   A is M x K (row-major)
+    //   B is K x N (row-major) 
+    //   D is M x N (row-major)
+    //
+    // Row-major data viewed as column-major appears transposed.
+    // So we compute: D = B^T * A^T with appropriate transposes
     cublasStatus_t status = cublasGemmEx(
         handle,
-        CUBLAS_OP_N, CUBLAS_OP_N,  // No transpose (we're working with transposed view)
-        N, M, K,                    // Swapped dimensions for transposed computation
+        CUBLAS_OP_N, CUBLAS_OP_N,  // No transposes needed
+        N, M, K,                    // Dimensions for column-major computation
         &alpha,
-        reinterpret_cast<const __nv_bfloat16*>(b), CUDA_R_16BF, N,  // B: KxN row-major, ld=N
-        reinterpret_cast<const __nv_bfloat16*>(a), CUDA_R_16BF, K,  // A: MxK row-major, ld=K
+        reinterpret_cast<const __nv_bfloat16*>(b), CUDA_R_16BF, N,  // B: leading dim N (row-major K x N)
+        reinterpret_cast<const __nv_bfloat16*>(a), CUDA_R_16BF, K,  // A: leading dim K (row-major M x K)
         &beta,
-        reinterpret_cast<__nv_bfloat16*>(d), CUDA_R_16BF, N,        // D: MxN row-major, ld=N
+        reinterpret_cast<__nv_bfloat16*>(d), CUDA_R_16BF, N,        // D: leading dim N (row-major M x N)
         CUBLAS_COMPUTE_32F,
         CUBLAS_GEMM_DEFAULT
     );
