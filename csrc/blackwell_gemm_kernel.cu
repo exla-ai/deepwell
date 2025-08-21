@@ -110,24 +110,26 @@ void launch_blackwell_mxfp8_gemm(
     // 2. Load scale factors into TMEM
     // 3. Execute block-scaled matrix multiply
     
-    // COPY THE CORRECT PARAMETERS from launch_production_gemm above
+    // SIMPLE WORKING APPROACH: Just swap matrix order, no transposes
     const __nv_bfloat16* A_ptr = static_cast<const __nv_bfloat16*>(a);
     const __nv_bfloat16* B_ptr = static_cast<const __nv_bfloat16*>(b);
     __nv_bfloat16* D_ptr = static_cast<__nv_bfloat16*>(d);
     
-    // VERIFIED CORRECT - same as launch_production_gemm above
+    // For row-major C = A * B, compute column-major C^T = B^T * A^T
+    // Since our data is row-major, it already appears transposed to cuBLAS
+    // So we just swap the order: gemm(B, A) instead of gemm(A, B)
     cublasStatus_t status = cublasGemmEx(
         handle,
-        CUBLAS_OP_N,        // No transpose (B^T already in memory as row-major)
-        CUBLAS_OP_N,        // No transpose (A^T already in memory as row-major)
-        N, M, K,            // Dimensions for D^T = B^T * A^T
+        CUBLAS_OP_N,        // No additional transpose
+        CUBLAS_OP_N,        // No additional transpose
+        N, M, K,            // Swapped dimensions
         &alpha,
-        B_ptr, CUDA_R_16BF, N,    // B: leading dimension N
-        A_ptr, CUDA_R_16BF, K,    // A: leading dimension K
+        B_ptr, CUDA_R_16BF, N,    // B goes first
+        A_ptr, CUDA_R_16BF, K,    // A goes second
         &beta,
-        D_ptr, CUDA_R_16BF, N,    // D: leading dimension N
-        CUBLAS_COMPUTE_32F,       // Use FP32 for accuracy
-        CUBLAS_GEMM_DEFAULT_TENSOR_OP  // Use tensor cores
+        D_ptr, CUDA_R_16BF, N,    // Output
+        CUBLAS_COMPUTE_32F,       // FP32 accumulation
+        CUBLAS_GEMM_DEFAULT_TENSOR_OP  // Tensor cores
     );
     
     if (status != CUBLAS_STATUS_SUCCESS) {
