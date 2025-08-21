@@ -3,7 +3,7 @@ name = "deepwell"
 version = "0.0.1"
 description = "Train efficiently on Blackwell via low-precision kernels, planning, and MoE support."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
   { name = "Viraat Das", email = "viraat@exla.ai" }
@@ -15,14 +15,25 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0"
+  "pytest>=8.0",
+  "black>=22.0",
+  "isort>=5.0",
+]
+cutlass = [
+  "nvidia-cutlass>=3.5.0",
 ]
 
 [build-system]
-requires = ["hatchling>=1.22.0"]
-build-backend = "hatchling.build"
+requires = [
+  "setuptools>=61.0",
+  "wheel",
+  "torch>=2.0.0",
+  "ninja",
+]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/deepwell"]
+[tool.setuptools]
+packages = ["deepwell"]
+package-dir = {"" = "src"}
 
 

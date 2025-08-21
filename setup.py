@@ -148,11 +148,11 @@ else:
 
 # Setup configuration
 setup(
-    name="deepwell-cutlass",
+    name="deepwell",
     version="0.0.1",
     author="Deepwell Team",
     description="CUTLASS kernels for Blackwell optimization",
-    long_description=open("README.md").read(),
+    long_description=open("README.md").read() if Path("README.md").exists() else "",
     long_description_content_type="text/markdown",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
@@ -168,6 +168,9 @@ setup(
             "pytest>=7.0",
             "black>=22.0",
             "isort>=5.0",
+        ],
+        "cutlass": [
+            "nvidia-cutlass>=3.5.0",
         ],
     },
     zip_safe=False,

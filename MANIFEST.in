@@ -1,0 +1,10 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include csrc *.cpp *.cu *.h *.cuh
+recursive-include src *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.pyc
+recursive-exclude * *.pyo
+recursive-exclude * *.so
+recursive-exclude * .DS_Store
