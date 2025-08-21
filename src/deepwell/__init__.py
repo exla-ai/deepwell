@@ -176,8 +176,7 @@ def export(engine: ExecutionEngine, path: str) -> dict:
 def optimize_for_blackwell(model,
                           precision: str = "mxfp8",
                           seq_len: int = 2048,
-                          batch_size: int = 32,
-                          use_v2: bool = True) -> ExecutionEngine:
+                          batch_size: int = 32) -> ExecutionEngine:
     """
     One-shot optimization for Blackwell GPUs.
     
@@ -186,18 +185,10 @@ def optimize_for_blackwell(model,
         precision: Target precision (mxfp8, nvfp4, etc.)
         seq_len: Sequence length
         batch_size: Batch size
-        use_v2: Use optimized V2 engine (recommended)
         
     Returns:
         Optimized execution engine
     """
-    # Use V2 optimized engine if requested (default)
-    if use_v2:
-        try:
-            from .optimized_engine import optimize_for_blackwell_v2
-            return optimize_for_blackwell_v2(model, precision, batch_size, seq_len)
-        except ImportError:
-            pass  # Fall back to V1
     # Probe hardware
     hw = probe()
     
