@@ -115,34 +115,35 @@ def benchmark_gemm(device='cuda'):
         # Proper warmup - run it multiple times to ensure compilation is complete
         for _ in range(5):
             _ = compiled_gemm(a, b)
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         
         compiled_result = bench.measure(lambda _: compiled_gemm(a, b), None, iterations=iterations, name="torch.compile (baseline)")
         
         # 2. Deepwell/CUTLASS
         try:
-            from deepwell import cutlass_kernels
-            
-            kernel = cutlass_kernels.BlackwellGemmKernel()
-            kernel.initialize(m, n, k, "bf16", False, 32)
-            
+            from deepwell.kernels.cutlass_bindings import CutlassKernel
+
+            kernel = CutlassKernel()
+
             def cutlass_gemm(_=None):
                 result = kernel.gemm(a, b)
-                torch.cuda.synchronize()  # Ensure kernel completes
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()  # Ensure kernel completes on GPU
                 return result
-            
+
             # Warmup
             for _ in range(5):
                 _ = cutlass_gemm()
-            
+
             cutlass_result = bench.measure(cutlass_gemm, None, iterations=iterations, name="Deepwell")
             
             # If timing is still too fast, use CUDA events for more precision
-            if cutlass_result['ms_per_iter'] < 0.1:
+            if torch.cuda.is_available() and cutlass_result['ms_per_iter'] < 0.1:
                 print(f"    Using CUDA events for precise timing...")
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
-                
+
                 # Measure with CUDA events
                 torch.cuda.synchronize()
                 start_event.record()
@@ -150,7 +151,7 @@ def benchmark_gemm(device='cuda'):
                     _ = kernel.gemm(a, b)
                 end_event.record()
                 torch.cuda.synchronize()
-                
+
                 cuda_time_ms = start_event.elapsed_time(end_event)
                 cutlass_ms_per_iter = cuda_time_ms / (iterations * 10)
                 cutlass_result['ms_per_iter'] = cutlass_ms_per_iter
@@ -245,7 +246,8 @@ def benchmark_model(model_size='small', device='cuda'):
         # Proper warmup - multiple runs to ensure full compilation
         for _ in range(3):
             _ = compiled_model(input_ids)
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
     
     compiled_result = bench.measure(compiled_model, input_ids, iterations=10, name="torch.compile (baseline)")
     
@@ -259,13 +261,14 @@ def benchmark_model(model_size='small', device='cuda'):
             batch_size=batch_size,
             seq_len=seq_len
         )
-        
+
         # Warmup Deepwell
         with torch.no_grad():
             for _ in range(3):
                 _ = optimized_model(input_ids)
-            torch.cuda.synchronize()
-        
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
         opt_result = bench.measure(optimized_model, input_ids, iterations=10, name="Deepwell")
         
         # Calculate metrics
