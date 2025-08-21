@@ -32,7 +32,7 @@ class BenchmarkModel(nn.Module):
         self.num_layers = config['num_layers']
         self.num_heads = config['num_heads']
         self.vocab_size = config.get('vocab_size', 50257)
-        self.max_seq_len = config.get('max_seq_len', 2048)
+        self.max_seq_len = config.get('max_seq_len', 8192)  # Increased for longer sequences
         
         # Build model
         self.embed = nn.Embedding(self.vocab_size, self.hidden_dim)
