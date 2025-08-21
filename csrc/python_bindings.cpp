@@ -6,6 +6,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
 #include "cutlass_kernels.h"
 
 namespace py = pybind11;
@@ -96,7 +97,7 @@ public:
         epilogue.beta = beta;
         
         // Get CUDA stream
-        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         
         // Execute GEMM
         void* c_ptr = c.has_value() ? get_cuda_ptr(c.value()) : nullptr;
@@ -197,7 +198,7 @@ public:
         epilogue.beta = beta;
         
         // Execute grouped GEMM
-        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         kernel->grouped_gemm(a_ptrs, b_ptrs, c_ptrs, d_ptrs, epilogue, stream);
         
         return outputs;
@@ -226,7 +227,7 @@ public:
         torch::Tensor scales = torch::empty({num_blocks}, 
                                            torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
         
-        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         MicroscaleManager::quantize_mxfp8(
             get_cuda_ptr(input),
             get_cuda_ptr(output),
@@ -250,7 +251,7 @@ public:
         torch::Tensor output = torch::empty(input.sizes(), 
                                            torch::TensorOptions().dtype(torch::kFloat16).device(input.device()));
         
-        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         MicroscaleManager::dequantize_mxfp8(
             get_cuda_ptr(input),
             get_cuda_ptr(scales),

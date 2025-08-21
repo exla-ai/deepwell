@@ -165,7 +165,7 @@ size_t BlackwellGemmKernel::get_workspace_size() const {
 
 double BlackwellGemmKernel::get_expected_tflops() const {
     // Calculate theoretical peak based on precision
-    double flops = 2.0 * pImpl->problem.m * pImpl->problem.n * pImpl->problem.k;
+    // double flops = 2.0 * pImpl->problem.m * pImpl->problem.n * pImpl->problem.k;
     
     // Blackwell theoretical peaks (approximate)
     double peak_tflops = 0;
