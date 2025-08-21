@@ -72,9 +72,23 @@ if USE_CUDA:
 # Include directories
 include_dirs = [
     str(CSRC_DIR),
-    str(CUTLASS_DIR / "include"),
-    str(CUTLASS_DIR / "tools/util/include"),
 ]
+
+# Add CUTLASS includes if it exists
+if CUTLASS_DIR.exists():
+    include_dirs.extend([
+        str(CUTLASS_DIR / "include"),
+        str(CUTLASS_DIR / "tools/util/include"),
+    ])
+else:
+    # Try system CUTLASS
+    system_cutlass = Path("/usr/local/cutlass")
+    if system_cutlass.exists():
+        include_dirs.extend([
+            str(system_cutlass / "include"),
+            str(system_cutlass / "tools/util/include"),
+        ])
+    # If no CUTLASS found, that's OK - we can still build without it
 
 # Add PyTorch include directories
 include_dirs.extend(cpp_extension.include_paths())
