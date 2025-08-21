@@ -32,24 +32,25 @@ if USE_CUDA:
         )
         if result.returncode == 0:
             compute_cap = result.stdout.strip().replace(".", "")
-            # Convert to CUDA arch flag
-            cuda_arch = f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"
+            # Convert to CUDA arch flags (as a list)
+            cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
             
             # Add PTX for forward compatibility
             if int(compute_cap) >= 100:  # Blackwell
-                cuda_arch += f" -gencode=arch=compute_100a,code=sm_100a"
+                # For Blackwell, add SM100a support
+                cuda_arch_flags.append(f"-gencode=arch=compute_100,code=sm_100a")
                 print(f"Detected Blackwell GPU (SM{compute_cap})")
             elif int(compute_cap) >= 90:  # Hopper
-                cuda_arch += f" -gencode=arch=compute_90a,code=sm_90a"
+                cuda_arch_flags.append(f"-gencode=arch=compute_90,code=sm_90a")
                 print(f"Detected Hopper GPU (SM{compute_cap})")
         else:
             # Default to common architectures
-            cuda_arch = "-gencode=arch=compute_80,code=sm_80"
+            cuda_arch_flags = ["-gencode=arch=compute_80,code=sm_80"]
             print("Using default CUDA architecture (SM80)")
     except:
-        cuda_arch = "-gencode=arch=compute_80,code=sm_80"
+        cuda_arch_flags = ["-gencode=arch=compute_80,code=sm_80"]
 else:
-    cuda_arch = ""
+    cuda_arch_flags = []
 
 # Extension sources
 sources = [
@@ -100,7 +101,7 @@ extra_compile_args = {
         "--expt-relaxed-constexpr",
         "--expt-extended-lambda",
         "--use_fast_math",
-        cuda_arch,
+        *cuda_arch_flags,  # Unpack the list of arch flags
         "-DUSE_CUTLASS",
         "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
     ],
