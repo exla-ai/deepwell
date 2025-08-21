@@ -12,7 +12,7 @@ import torch
 # Get paths
 ROOT_DIR = Path(__file__).parent
 CSRC_DIR = ROOT_DIR / "csrc"
-CUTLASS_DIR = os.environ.get("CUTLASS_PATH", "/usr/local/cutlass")
+CUTLASS_DIR = Path(os.environ.get("CUTLASS_PATH", "/usr/local/cutlass"))
 
 # Check for CUDA
 if not torch.cuda.is_available():
