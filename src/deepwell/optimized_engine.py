@@ -106,10 +106,11 @@ class OptimizedBlackwellModel(nn.Module):
         replace_linear_in_module(optimized_model)
         
         # Compile the whole model
+        # Note: fullgraph=False to handle complex control flow in transformer models
         compiled = torch.compile(
             optimized_model,
             mode="max-autotune",  # Maximum optimization
-            fullgraph=True,        # Compile as single graph
+            fullgraph=False,       # Allow graph breaks for complex models
             dynamic=False          # Static shapes for best performance
         )
         
@@ -164,12 +165,25 @@ def optimize_for_blackwell_v2(
     # Warmup to trigger compilation
     print("\nWarming up (triggers torch.compile)...")
     device = next(model.parameters()).device
-    dummy_input = torch.randn(batch_size, seq_len, 768, device=device)
     
+    # Check if model expects token IDs or embeddings
+    # Most models expect token IDs (integers) as input
+    try:
+        # Try with token IDs first (most common)
+        dummy_input = torch.randint(0, 50257, (batch_size, seq_len), device=device)
+        with torch.no_grad():
+            _ = opt_model(dummy_input)
+        input_type = "tokens"
+    except:
+        # Fall back to embeddings
+        dummy_input = torch.randn(batch_size, seq_len, 768, device=device)
+        input_type = "embeddings"
+    
+    # Do warmup passes
     with torch.no_grad():
         for i in range(3):
             _ = opt_model(dummy_input)
-            print(f"  Warmup {i+1}/3 complete")
+            print(f"  Warmup {i+1}/3 complete (input: {input_type})")
     
     print("\n✓ Model optimized for Blackwell")
     print("  - Large GEMMs use CUTLASS (1700+ TFLOPS)")
