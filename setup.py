@@ -62,7 +62,8 @@ sources = [
 if USE_CUDA:
     cuda_sources = [
         "blackwell_gemm_kernel.cu",
-        "mxfp8_quantization.cu"
+        "mxfp8_quantization.cu",
+        "tcgen05_gemm.cu"
     ]
     for cuda_file in cuda_sources:
         cuda_path = CSRC_DIR / cuda_file
@@ -118,6 +119,8 @@ extra_compile_args = {
         *cuda_arch_flags,  # Unpack the list of arch flags
         "-DUSE_CUTLASS",
         "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
+        "-DCUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES=1",
+        "-DCUTLASS_ENABLE_SM100_TCGEN05=1",
     ],
 }
 
