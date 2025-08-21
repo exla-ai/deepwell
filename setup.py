@@ -61,8 +61,7 @@ sources = [
 # Add CUDA kernel sources if CUDA is available
 if USE_CUDA:
     cuda_sources = [
-        "blackwell_gemm_production.cu",  # Production kernel with fixes
-        "blackwell_gemm_kernel.cu",      # Keep for compatibility
+        "blackwell_gemm_kernel.cu",  # Main kernel with correctness fix
         "mxfp8_quantization.cu"
     ]
     for cuda_file in cuda_sources:
