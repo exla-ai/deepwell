@@ -99,7 +99,7 @@ print(f"CUTLASS Available: {CUTLASS_AVAILABLE}")
 hw = dw.probe()
 for gpu in hw.gpus:
     if gpu.is_blackwell:
-        print(f"✓ Blackwell {gpu.blackwell_variant} detected!")
+        print(f"Blackwell {gpu.blackwell_variant} detected!")
         print(f"  MXFP8 support: {gpu.supports_mxfp8}")
         print(f"  FP4 support: {gpu.supports_fp4}")
 ```
@@ -153,27 +153,27 @@ uv publish
 ### Our Solution
 Deepwell provides **production-ready** Blackwell optimization:
 
-#### 🚀 Automatic Hardware Optimization
+#### Automatic Hardware Optimization
 - Detects Blackwell variants (SM100/SM120) and capabilities
 - Selects optimal kernels based on problem size and precision
 - Manages TMEM residency for maximum throughput
 - Optimizes thread block clusters for Blackwell architecture
 
-#### 🎯 Intelligent Precision Management
+#### Intelligent Precision Management
 - **MXFP8**: 2-3x speedup with <0.1% accuracy loss
 - **NVFP4**: 4-5x speedup with careful layer selection
 - **Microscaling**: Block-wise quantization (32-element blocks)
 - **Transpose-aware**: Handles MXFP8 requantization automatically
 - **Fallback policies**: BF16 safety net for sensitive layers
 
-#### ⚡ Production CUTLASS Integration
+#### Production CUTLASS Integration
 - **Native C++ kernels**: Zero-overhead Blackwell operations
 - **Python bindings**: Seamless PyTorch integration
 - **Grouped GEMM**: Efficient MoE with batched experts
 - **Fused epilogues**: Bias, activation in single kernel
 - **Automatic build**: Detects and configures for your GPU
 
-#### 📊 Performance Gains on B200
+#### Performance Gains on B200
 - **Training**: 2.5-4x faster than BF16 baseline
 - **Memory**: 50-75% reduction enables 2x larger models
 - **MoE**: 3x faster expert routing with grouped GEMM
@@ -345,7 +345,7 @@ Extras to add (next docs sections):
 
 ## Current Implementation Status
 
-### ✅ Completed
+### Completed
 - **Hardware Probing**: Detects GPU capabilities, Blackwell features (SM100/SM120)
 - **Model Capture**: FX-based graph capture with operation tagging
 - **IR System**: Full graph representation with tensors, operations, and parameters
@@ -365,14 +365,14 @@ Extras to add (next docs sections):
 - **Execution Engine**: Real kernel dispatch (not mocked)
 - **End-to-End API**: Complete optimization pipeline
 
-### 🚧 Ready for B200 Testing
+### Ready for B200 Testing
 The framework is now production-ready for Blackwell testing:
 - Native CUTLASS kernels for SM100/SM120
 - MXFP8 and NVFP4 support with microscaling
 - Grouped GEMM for efficient MoE execution
 - Automatic kernel selection and fallback
 
-### 📋 Future Enhancements
+### Future Enhancements
 - Transformer Engine integration when FP4 support lands
 - Distributed training with NVLink-aware placement
 - Advanced checkpoint/restore functionality
@@ -463,7 +463,7 @@ dw.print_hardware_info(hw)
 
 # Verify Blackwell
 assert any(gpu.is_blackwell for gpu in hw.gpus), "No Blackwell GPU found!"
-print(f"✓ Blackwell detected: {hw.gpus[0].blackwell_variant}")
+print(f"Blackwell detected: {hw.gpus[0].blackwell_variant}")
 ```
 
 ### 3. Optimize Your Model
