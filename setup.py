@@ -127,7 +127,7 @@ extra_compile_args = {
 if USE_CUDA:
     ext_modules = [
         cpp_extension.CUDAExtension(
-            name="deepwell.cutlass_kernels",
+            name="deepwell.cutlass_kernels",  # Full module path
             sources=sources,
             include_dirs=include_dirs,
             libraries=libraries,
