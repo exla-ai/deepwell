@@ -41,15 +41,18 @@ void launch_blackwell_mxfp8_gemm(
     // 3. Execute block-scaled matrix multiply
     
     // Use cuBLAS GEMM for BF16
+    // PyTorch uses row-major layout, cuBLAS expects column-major
+    // For row-major: D = A * B where A is MxK, B is KxN, D is MxN
+    // We use the identity: row_major(D = A*B) = col_major(D^T = B^T*A^T)
     cublasStatus_t status = cublasGemmEx(
         handle,
-        CUBLAS_OP_N, CUBLAS_OP_N,
-        N, M, K,
+        CUBLAS_OP_N, CUBLAS_OP_N,  // No transpose (we're working with transposed view)
+        N, M, K,                    // Swapped dimensions for transposed computation
         &alpha,
-        b, CUDA_R_16BF, N,
-        a, CUDA_R_16BF, K, 
+        reinterpret_cast<const __nv_bfloat16*>(b), CUDA_R_16BF, N,  // B: KxN row-major, ld=N
+        reinterpret_cast<const __nv_bfloat16*>(a), CUDA_R_16BF, K,  // A: MxK row-major, ld=K
         &beta,
-        d, CUDA_R_16BF, N,
+        reinterpret_cast<__nv_bfloat16*>(d), CUDA_R_16BF, N,        // D: MxN row-major, ld=N
         CUBLAS_COMPUTE_32F,
         CUBLAS_GEMM_DEFAULT
     );
