@@ -14,7 +14,7 @@ import time
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
 import deepwell as dw
 
@@ -45,25 +45,28 @@ def test_cutlass_gemm():
         b = torch.randn(k, n, device=device, dtype=torch.bfloat16)
         
         # PyTorch baseline
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         start = time.perf_counter()
         for _ in range(100):
             c_pytorch = torch.matmul(a, b)
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         pytorch_time = time.perf_counter() - start
         
         # CUTLASS kernel
         try:
-            from deepwell import cutlass_kernels
-            
-            kernel = cutlass_kernels.BlackwellGemmKernel()
-            kernel.initialize(m, n, k, "bf16", False, 32)
-            
-            torch.cuda.synchronize()
+            from deepwell.kernels.cutlass_bindings import CutlassKernel
+
+            kernel = CutlassKernel()
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             start = time.perf_counter()
             for _ in range(100):
                 c_cutlass = kernel.gemm(a, b)
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             cutlass_time = time.perf_counter() - start
             
             # Calculate metrics
@@ -131,26 +134,30 @@ def test_model_optimization():
         with torch.no_grad():
             _ = model(x)
             _ = optimized(x)
-    
+
     # Benchmark
     iterations = 100
-    
+
     # Baseline
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     start = time.perf_counter()
     with torch.no_grad():
         for _ in range(iterations):
             _ = model(x)
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     baseline_time = time.perf_counter() - start
-    
+
     # Optimized
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     start = time.perf_counter()
     with torch.no_grad():
         for _ in range(iterations):
             _ = optimized(x)
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     optimized_time = time.perf_counter() - start
     
     # Results
