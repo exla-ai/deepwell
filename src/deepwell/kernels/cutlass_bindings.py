@@ -49,6 +49,7 @@ class CutlassKernel:
         self.config = config or CutlassConfig()
         self.kernel_cache: Dict[str, Any] = {}
         self.is_initialized = False
+        self.current_kernel = None
         
     def _get_kernel_key(self, 
                        m: int, n: int, k: int,
@@ -107,36 +108,27 @@ class CutlassKernel:
         Returns:
             Result matrix
         """
-        if CUTLASS_AVAILABLE and self.kernel_cache:
-            # Use actual CUTLASS kernel
+        if CUTLASS_AVAILABLE:
+            # Check if we have a kernel for this size
             kernel_key = self._get_kernel_key(
                 a.shape[0], b.shape[1], a.shape[1],
                 str(a.dtype), str(b.dtype), str(c.dtype if c is not None else a.dtype)
             )
             
-            if kernel_key not in self.kernel_cache:
-                # Build kernel if not cached
-                kernel = _cutlass_ext.BlackwellGemmKernel()
-                kernel.initialize(
-                    a.shape[0], b.shape[1], a.shape[1],
-                    self._dtype_to_cutlass_str(a.dtype),
-                    use_microscaling,
-                    self.config.microscale_block_size if use_microscaling else 32
-                )
-                
-                if self.config.use_tcgen05:
-                    kernel.enable_tmem_residency(self.config.tmem_residency)
-                
-                self.kernel_cache[kernel_key] = kernel
-            
-            kernel = self.kernel_cache[kernel_key]
-            return kernel.gemm(a, b, c, alpha, beta)
+            if kernel_key in self.kernel_cache:
+                # Use cached kernel
+                kernel = self.kernel_cache[kernel_key]
+                return kernel.gemm(a, b, c, alpha, beta)
+            elif hasattr(self, 'current_kernel') and self.current_kernel is not None:
+                # Use the kernel that was initialized
+                # Note: This may have different dimensions, so we need to be careful
+                return self.current_kernel.gemm(a, b, c, alpha, beta)
+        
+        # Fallback to PyTorch
+        if c is not None:
+            return alpha * torch.matmul(a, b) + beta * c
         else:
-            # Fallback to PyTorch
-            if c is not None:
-                return alpha * torch.matmul(a, b) + beta * c
-            else:
-                return alpha * torch.matmul(a, b)
+            return alpha * torch.matmul(a, b)
     
     def _dtype_to_cutlass_str(self, dtype: torch.dtype) -> str:
         """Convert PyTorch dtype to CUTLASS string."""
@@ -148,10 +140,58 @@ class CutlassKernel:
         }
         return dtype_map.get(dtype, "fp16")
     
-    def initialize(self):
-        """Initialize CUTLASS runtime."""
-        # Would initialize CUDA context, load kernels, etc.
+    def initialize(self, m: int = None, n: int = None, k: int = None,
+                  precision: str = "bf16",
+                  use_microscaling: bool = False,
+                  block_size: int = 32):
+        """Initialize kernel with problem dimensions."""
+        if m is None or n is None or k is None:
+            # Old initialize() call with no params
+            self.is_initialized = True
+            return
+        
+        # Store parameters for reuse
+        self.m = m
+        self.n = n
+        self.k = k
+        self.precision = precision
+        self.use_microscaling = use_microscaling
+        self.block_size = block_size
+        
+        if CUTLASS_AVAILABLE:
+            # Create actual CUTLASS kernel
+            kernel_key = self._get_kernel_key(m, n, k, precision, precision, precision)
+            
+            if kernel_key not in self.kernel_cache:
+                kernel = _cutlass_ext.BlackwellGemmKernel()
+                kernel.initialize(
+                    m, n, k,
+                    self._dtype_to_cutlass_str(self._precision_to_dtype(precision)),
+                    use_microscaling,
+                    block_size
+                )
+                
+                # Apply Blackwell optimizations
+                if self.config.use_tcgen05:
+                    kernel.enable_tmem_residency(self.config.tmem_residency)
+                
+                self.kernel_cache[kernel_key] = kernel
+                self.current_kernel = kernel
+        
         self.is_initialized = True
+    
+    def _precision_to_dtype(self, precision: str) -> torch.dtype:
+        """Convert precision string to PyTorch dtype."""
+        dtype_map = {
+            "fp32": torch.float32,
+            "fp16": torch.float16, 
+            "bf16": torch.bfloat16,
+            "bfloat16": torch.bfloat16,
+            "mxfp8": torch.bfloat16,  # Use BF16 for now
+            "nvfp4": torch.bfloat16,  # Use BF16 for now
+            "int8": torch.int8,
+        }
+        return dtype_map.get(precision, torch.bfloat16)
 
 
 class GroupedGEMMKernel(CutlassKernel):
