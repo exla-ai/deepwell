@@ -10,6 +10,7 @@ import time
 from .compile import CompiledOp, ExecutionEngine
 from .ir import IR, Op
 from .precision.policy import LayerPrecision, Precision
+from .kernels.cutlass_bindings import CutlassKernel
 
 
 class ExecutableModel(nn.Module):
@@ -156,8 +157,35 @@ class ExecutableModel(nn.Module):
             # Use BF16 path (stable with cuBLAS backend)
             for layer in mlp:
                 if isinstance(layer, nn.Linear):
+                    # Each linear layer may have different dimensions
+                    # Create kernel specific to this layer's dimensions
+                    in_features = layer.in_features
+                    out_features = layer.out_features
+                    
+                    # Create layer-specific kernel if needed
+                    layer_kernel_key = f"mlp_linear_{layer_idx}_{in_features}_{out_features}"
+                    if layer_kernel_key not in self.kernel_cache:
+                        try:
+                            layer_kernel = CutlassKernel()
+                            layer_kernel.initialize(
+                                batch_size * seq_len,  # M
+                                out_features,           # N
+                                in_features,            # K
+                                "mxfp8" if precision == Precision.MXFP8 else "nvfp4",
+                                use_microscaling=True,
+                                block_size=32
+                            )
+                            self.kernel_cache[layer_kernel_key] = layer_kernel
+                        except Exception as e:
+                            # Fallback to PyTorch for this layer
+                            x_2d = layer(x_2d)
+                            continue
+                    else:
+                        layer_kernel = self.kernel_cache[layer_kernel_key]
+                    
+                    # Execute GEMM with correct kernel
                     weight = layer.weight.t().contiguous()
-                    x_2d = kernel.gemm(x_2d.to(torch.bfloat16), weight.to(torch.bfloat16))
+                    x_2d = layer_kernel.gemm(x_2d.to(torch.bfloat16), weight.to(torch.bfloat16))
                     if layer.bias is not None:
                         x_2d = x_2d + layer.bias
                 elif isinstance(layer, nn.GELU):
