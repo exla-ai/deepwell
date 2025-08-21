@@ -142,6 +142,18 @@ optimized_model = dw.optimize_for_blackwell(
 output = optimized_model(input_tensor)
 ```
 
+### Examples
+
+See the [`examples/`](examples/) directory for complete working examples:
+- **[`train_moe.py`](examples/train_moe.py)** - Training a Mixture of Experts model
+- **[`test_kernels.py`](examples/test_kernels.py)** - Testing CUTLASS kernel performance
+
+Run examples:
+```bash
+python examples/train_moe.py      # Train an MoE model
+python examples/test_kernels.py   # Test kernel performance
+```
+
 ### Advanced Usage
 
 #### Manual Pipeline Control
