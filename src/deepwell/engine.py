@@ -151,58 +151,19 @@ class ExecutableModel(nn.Module):
             else:
                 kernel = self.kernel_cache[kernel_key]
             
-            # Quantize input to MXFP8 if needed
-            if precision == Precision.MXFP8:
-                try:
-                    # Quantize input
-                    x_quant, x_scales = self.cutlass_module.MicroscaleManager.quantize_mxfp8(x_2d)
-                    
-                    # Execute through MLP layers
-                    for layer in mlp:
-                        if isinstance(layer, nn.Linear):
-                            # Quantize weights
-                            weight = layer.weight.t().contiguous()
-                            w_quant, w_scales = self.cutlass_module.MicroscaleManager.quantize_mxfp8(weight)
-                            
-                            # Use CUTLASS GEMM with quantized inputs
-                            x_2d = kernel.gemm(x_quant, w_quant)
-                            
-                            # Dequantize output
-                            x_2d = self.cutlass_module.MicroscaleManager.dequantize_mxfp8(
-                                x_2d, x_scales, 32
-                            )
-                            
-                            if layer.bias is not None:
-                                x_2d = x_2d + layer.bias
-                        elif isinstance(layer, nn.GELU):
-                            x_2d = torch.nn.functional.gelu(x_2d)
-                        else:
-                            x_2d = layer(x_2d)
-                except Exception as e:
-                    warnings.warn(f"MXFP8 quantization failed, using BF16: {e}")
-                    # Fallback to BF16
-                    for layer in mlp:
-                        if isinstance(layer, nn.Linear):
-                            weight = layer.weight.t().contiguous()
-                            x_2d = kernel.gemm(x_2d, weight)
-                            if layer.bias is not None:
-                                x_2d = x_2d + layer.bias
-                        elif isinstance(layer, nn.GELU):
-                            x_2d = torch.nn.functional.gelu(x_2d)
-                        else:
-                            x_2d = layer(x_2d)
-            else:
-                # Execute without quantization (BF16 path)
-                for layer in mlp:
-                    if isinstance(layer, nn.Linear):
-                        weight = layer.weight.t().contiguous()
-                        x_2d = kernel.gemm(x_2d, weight)
-                        if layer.bias is not None:
-                            x_2d = x_2d + layer.bias
-                    elif isinstance(layer, nn.GELU):
-                        x_2d = torch.nn.functional.gelu(x_2d)
-                    else:
-                        x_2d = layer(x_2d)
+            # For now, skip quantization and use BF16 directly
+            # Full MXFP8 requires proper E4M3 format support
+            # Use BF16 path (stable with cuBLAS backend)
+            for layer in mlp:
+                if isinstance(layer, nn.Linear):
+                    weight = layer.weight.t().contiguous()
+                    x_2d = kernel.gemm(x_2d.to(torch.bfloat16), weight.to(torch.bfloat16))
+                    if layer.bias is not None:
+                        x_2d = x_2d + layer.bias
+                elif isinstance(layer, nn.GELU):
+                    x_2d = torch.nn.functional.gelu(x_2d)
+                else:
+                    x_2d = layer(x_2d)
             
             # Reshape back
             x = x_2d.view(batch_size, seq_len, -1)
