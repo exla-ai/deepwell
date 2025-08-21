@@ -117,7 +117,7 @@ def benchmark_gemm(device='cuda'):
             _ = compiled_gemm(a, b)
         torch.cuda.synchronize()
         
-        compiled_result = bench.measure(lambda: compiled_gemm(a, b), None, iterations=iterations, name="torch.compile (baseline)")
+        compiled_result = bench.measure(lambda _: compiled_gemm(a, b), None, iterations=iterations, name="torch.compile (baseline)")
         
         # 2. Deepwell/CUTLASS
         try:
@@ -126,7 +126,7 @@ def benchmark_gemm(device='cuda'):
             kernel = cutlass_kernels.BlackwellGemmKernel()
             kernel.initialize(m, n, k, "bf16", False, 32)
             
-            def cutlass_gemm():
+            def cutlass_gemm(_=None):
                 result = kernel.gemm(a, b)
                 torch.cuda.synchronize()  # Ensure kernel completes
                 return result
