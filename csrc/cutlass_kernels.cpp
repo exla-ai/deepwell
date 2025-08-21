@@ -30,14 +30,7 @@ namespace deepwell {
         int num_elements, cudaStream_t stream
     );
     
-    // tcgen05.mma kernel from tcgen05_gemm.cu
-    void launch_tcgen05_mxfp8_gemm(
-        void* d, const void* a, const void* b,
-        const void* scale_a, const void* scale_b,
-        int M, int N, int K,
-        float alpha, float beta,
-        cudaStream_t stream
-    );
+
     
     // MXFP8 quantization functions
     void quantize_to_mxfp8_bf16(
@@ -188,16 +181,7 @@ void BlackwellGemmKernel::gemm(
         cudaMemset(scale_b, 0x3f800000, scale_size_b);
         
         // Call our Blackwell MXFP8 GEMM kernel
-        // Use tcgen05.mma kernel when possible
-        #ifdef CUTLASS_ENABLE_SM100_TCGEN05
-        launch_tcgen05_mxfp8_gemm(
-            d, a, b,
-            scale_a, scale_b,
-            pImpl->problem.m, pImpl->problem.n, pImpl->problem.k,
-            epilogue.alpha, epilogue.beta,
-            stream
-        );
-        #else
+        // Use Blackwell optimized kernel
         launch_blackwell_mxfp8_gemm(
             d, a, b,
             scale_a, scale_b,
@@ -205,7 +189,6 @@ void BlackwellGemmKernel::gemm(
             epilogue.alpha, epilogue.beta,
             stream
         );
-        #endif
         
         // Clean up temporary scales
         cudaFree(scale_a);

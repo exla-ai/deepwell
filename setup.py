@@ -62,8 +62,7 @@ sources = [
 if USE_CUDA:
     cuda_sources = [
         "blackwell_gemm_kernel.cu",
-        "mxfp8_quantization.cu",
-        "tcgen05_gemm.cu"
+        "mxfp8_quantization.cu"
     ]
     for cuda_file in cuda_sources:
         cuda_path = CSRC_DIR / cuda_file
