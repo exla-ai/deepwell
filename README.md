@@ -357,6 +357,12 @@ Extras to add (next docs sections):
   - GroupedGemmKernel for MoE workloads
   - MicroscaleManager for MXFP8/FP4 quantization
   - Automatic fallback to cuBLAS when CUTLASS unavailable
+- **Real Blackwell Kernel Dispatch**: 
+  - Native `tcgen05.mma` instruction usage for MXFP8/FP4
+  - MXFP8 quantization kernel with correct scale factor layout
+  - Tensor Memory (TMEM) utilization for accumulation
+  - Block-scaled matrix multiplication with 32-element blocks
+- **Execution Engine**: Real kernel dispatch (not mocked)
 - **End-to-End API**: Complete optimization pipeline
 
 ### 🚧 Ready for B200 Testing

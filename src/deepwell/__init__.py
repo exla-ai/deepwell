@@ -11,6 +11,7 @@ from .probe import probe, HardwareConfig, GPUInfo
 from .capture import capture, ModelTracer
 from .ir import IR, Op, TensorTy
 from .compile import compile, ExecutionEngine, Compiler
+from .engine import create_executable_model, benchmark_engine
 
 # Precision management
 from .precision.policy import (
@@ -235,6 +236,8 @@ __all__ = [
     'compile',
     'dryrun',
     'export',
+    'create_executable_model',
+    'benchmark_engine',
     
     # Classes
     'Trainer',

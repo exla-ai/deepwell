@@ -57,6 +57,17 @@ sources = [
     str(CSRC_DIR / "python_bindings.cpp"),
 ]
 
+# Add CUDA kernel sources if CUDA is available
+if USE_CUDA:
+    cuda_sources = [
+        "blackwell_gemm_kernel.cu",
+        "mxfp8_quantization.cu"
+    ]
+    for cuda_file in cuda_sources:
+        cuda_path = CSRC_DIR / cuda_file
+        if cuda_path.exists():
+            sources.append(str(cuda_path))
+
 # Include directories
 include_dirs = [
     str(CSRC_DIR),

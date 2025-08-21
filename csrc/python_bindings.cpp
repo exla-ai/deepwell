@@ -212,7 +212,7 @@ public:
 // Python wrapper for MicroscaleManager
 class PyMicroscaleManager {
 public:
-    static torch::Tensor quantize_mxfp8(
+    static std::tuple<torch::Tensor, torch::Tensor> quantize_mxfp8(
         torch::Tensor input,
         int block_size = 32
     ) {
@@ -225,7 +225,7 @@ public:
         // Create output tensors
         torch::Tensor output = torch::empty_like(input, torch::kInt8);
         torch::Tensor scales = torch::empty({num_blocks}, 
-                                           torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
+                                           torch::TensorOptions().dtype(torch::kInt8).device(input.device()));
         
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         MicroscaleManager::quantize_mxfp8(
@@ -237,7 +237,7 @@ public:
             stream
         );
         
-        return output;
+        return std::make_tuple(output, scales);
     }
     
     static torch::Tensor dequantize_mxfp8(

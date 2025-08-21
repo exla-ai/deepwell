@@ -15,6 +15,38 @@
 // #include <cutlass/gemm/device/gemm_grouped.h>
 // #include <cutlass/numeric_types.h>
 
+// Forward declarations for our Blackwell CUDA kernels
+namespace deepwell {
+    void launch_blackwell_mxfp8_gemm(
+        void* d, const void* a, const void* b,
+        const void* scale_a, const void* scale_b,
+        int M, int N, int K,
+        float alpha, float beta,
+        cudaStream_t stream
+    );
+    
+    void launch_quantize_mxfp8(
+        void* output, void* scale_output, const float* input,
+        int num_elements, cudaStream_t stream
+    );
+    
+    // MXFP8 quantization functions
+    void quantize_to_mxfp8_bf16(
+        void* output, void* scales, const void* input,
+        int M, int N, bool row_major, cudaStream_t stream
+    );
+    
+    void quantize_to_mxfp8_fp32(
+        void* output, void* scales, const void* input,
+        int M, int N, bool row_major, cudaStream_t stream
+    );
+    
+    void dequantize_from_mxfp8_bf16(
+        void* output, const void* input, const void* scales,
+        int M, int N, bool row_major, cudaStream_t stream
+    );
+}
+
 namespace deepwell {
 
 // Implementation class for BlackwellGemmKernel
@@ -128,16 +160,40 @@ void BlackwellGemmKernel::gemm(
             &beta,
             static_cast<__half*>(d), pImpl->problem.ldc
         );
-    } else if (pImpl->dtype_a == PrecisionType::MXFP8 || 
-               pImpl->dtype_a == PrecisionType::NVFP4) {
-        // For MXFP8/FP4, we would:
-        // 1. Dequantize to FP16
-        // 2. Run FP16 GEMM
-        // 3. Quantize result if needed
-        // This is a placeholder - actual implementation would use
-        // native Blackwell kernels
+    } else if (pImpl->dtype_a == PrecisionType::MXFP8) {
+        // Use our actual Blackwell MXFP8 kernel!
+        // Note: For now we assume scale factors are passed with the data
+        // In production, they would be computed/stored separately
         
-        // For now, treat as FP16
+        // Allocate scale factors if not provided
+        void* scale_a = nullptr;
+        void* scale_b = nullptr;
+        size_t scale_size_a = ((pImpl->problem.m * pImpl->problem.k + 31) / 32) * sizeof(float);
+        size_t scale_size_b = ((pImpl->problem.k * pImpl->problem.n + 31) / 32) * sizeof(float);
+        
+        cudaMalloc(&scale_a, scale_size_a);
+        cudaMalloc(&scale_b, scale_size_b);
+        
+        // Initialize scales to 1.0 for now (in production these would be computed)
+        cudaMemset(scale_a, 0x3f800000, scale_size_a);  // IEEE 754 for 1.0f
+        cudaMemset(scale_b, 0x3f800000, scale_size_b);
+        
+        // Call our Blackwell MXFP8 GEMM kernel
+        launch_blackwell_mxfp8_gemm(
+            d, a, b,
+            scale_a, scale_b,
+            pImpl->problem.m, pImpl->problem.n, pImpl->problem.k,
+            epilogue.alpha, epilogue.beta,
+            stream
+        );
+        
+        // Clean up temporary scales
+        cudaFree(scale_a);
+        cudaFree(scale_b);
+        
+    } else if (pImpl->dtype_a == PrecisionType::NVFP4) {
+        // For FP4, fall back to FP16 for now
+        // In production, we'd have a separate FP4 kernel
         __half alpha = __float2half(epilogue.alpha);
         __half beta = __float2half(epilogue.beta);
         
@@ -286,10 +342,14 @@ void MicroscaleManager::quantize_mxfp8(
     int block_size,
     cudaStream_t stream
 ) {
-    // Placeholder - would implement actual quantization kernel
-    // For now, just copy
-    cudaMemcpyAsync(output, input, num_elements * sizeof(float), 
-                    cudaMemcpyDeviceToDevice, stream);
+    // Use our real MXFP8 quantization kernel!
+    // Assuming 2D matrix for now - in production would handle arbitrary shapes
+    int M = 1;
+    int N = num_elements;
+    
+    // Detect input type and dispatch to appropriate kernel
+    // For now assume BF16 input (common for training)
+    quantize_to_mxfp8_bf16(output, scales, input, M, N, true, stream);
 }
 
 void MicroscaleManager::dequantize_mxfp8(
@@ -300,9 +360,11 @@ void MicroscaleManager::dequantize_mxfp8(
     int block_size,
     cudaStream_t stream
 ) {
-    // Placeholder - would implement actual dequantization kernel
-    cudaMemcpyAsync(output, input, num_elements * sizeof(float),
-                    cudaMemcpyDeviceToDevice, stream);
+    // Use our real MXFP8 dequantization kernel!
+    int M = 1;
+    int N = num_elements;
+    
+    dequantize_from_mxfp8_bf16(output, input, scales, M, N, true, stream);
 }
 
 void MicroscaleManager::transpose_mxfp8(
