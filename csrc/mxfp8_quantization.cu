@@ -207,14 +207,14 @@ __global__ void dequantize_from_mxfp8_kernel(
 // This is critical for backward pass where we need AT
 template <typename InputType>
 __global__ void transpose_quantize_to_mxfp8_kernel(
-    cutlass::float_e4m3_t* __restrict__ output,     // Transposed & quantized
-    cutlass::float_ue8m0_t* __restrict__ scales,    // Scale factors for transposed
-    const InputType* __restrict__ input,            // Input tensor
-    int M, int N                                    // Original dimensions
+    int8_t* __restrict__ output,          // Transposed & quantized
+    float* __restrict__ scales,           // Scale factors for transposed
+    const InputType* __restrict__ input,  // Input tensor
+    int M, int N                          // Original dimensions
 ) {
     // Implementation would handle transpose + quantization in one pass
     // This is crucial for performance as transpose changes scale factor blocks
-    // For now, placeholder
+    // For now, placeholder - just a stub
 }
 
 // C++ wrapper functions
