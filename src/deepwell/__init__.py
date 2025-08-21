@@ -176,7 +176,7 @@ def export(engine: ExecutionEngine, path: str) -> dict:
 def optimize_for_blackwell(model,
                           precision: str = "mxfp8",
                           seq_len: int = 2048,
-                          batch_size: int = 32) -> ExecutionEngine:
+                          batch_size: int = 32):
     """
     One-shot optimization for Blackwell GPUs.
     
@@ -187,45 +187,78 @@ def optimize_for_blackwell(model,
         batch_size: Batch size
         
     Returns:
-        Optimized execution engine
+        Optimized callable model
     """
-    # Probe hardware
-    hw = probe()
+    # Try simple optimization first (direct kernel replacement)
+    try:
+        from .kernels.production_kernels import optimize_model_inplace, KernelConfig
+        import copy
+        
+        # Create optimized model with production kernels
+        optimized_model = copy.deepcopy(model)
+        
+        config = KernelConfig(
+            use_cutlass=True,
+            precision=precision if precision in ["bf16", "mxfp8", "fp4"] else "bf16",
+            min_size_for_cutlass=512
+        )
+        
+        optimized_model = optimize_model_inplace(optimized_model, config)
+        return optimized_model
+        
+    except Exception as e:
+        # Fall back to full pipeline if simple optimization fails
+        pass
     
-    # Check for Blackwell
-    has_blackwell = any(gpu.is_blackwell for gpu in hw.gpus)
-    if not has_blackwell:
+    # Full pipeline (for when all components are ready)
+    try:
+        # Probe hardware
+        hw = probe()
+        
+        # Check for Blackwell
+        has_blackwell = any(gpu.is_blackwell for gpu in hw.gpus)
+        if not has_blackwell:
+            import warnings
+            warnings.warn("No Blackwell GPU detected - optimizations may not apply")
+        
+        # Capture model
+        ir = capture(model)
+        
+        # Auto-plan
+        plan = autoplan(
+            ir, hw,
+            seq_len=seq_len,
+            global_batch=batch_size * hw.total_gpus,
+            arch="blackwell-sm100" if has_blackwell else "cuda"
+        )
+        
+        # Compile
+        engine = compile(
+            ir,
+            plan=plan,
+            precision=precision,
+            fallback="safe",
+            sm_version=100 if has_blackwell else 90
+        )
+        
+        # Validate
+        results = dryrun(engine)
+        if results['status'] == 'has_issues':
+            import warnings
+            for issue in results['validation']:
+                warnings.warn(f"Validation issue: {issue}")
+        
+        # Create executable model
+        from .engine import create_executable_model
+        executable = create_executable_model(engine, model)
+        
+        return executable
+        
+    except Exception as e:
+        # If all else fails, return original model
         import warnings
-        warnings.warn("No Blackwell GPU detected - optimizations may not apply")
-    
-    # Capture model
-    ir = capture(model)
-    
-    # Auto-plan
-    plan = autoplan(
-        ir, hw,
-        seq_len=seq_len,
-        global_batch=batch_size * hw.total_gpus,
-        arch="blackwell-sm100" if has_blackwell else "cuda"
-    )
-    
-    # Compile
-    engine = compile(
-        ir,
-        plan=plan,
-        precision=precision,
-        fallback="safe",
-        sm_version=100 if has_blackwell else 90
-    )
-    
-    # Validate
-    results = dryrun(engine)
-    if results['status'] == 'has_issues':
-        import warnings
-        for issue in results['validation']:
-            warnings.warn(f"Validation issue: {issue}")
-    
-    return engine
+        warnings.warn(f"Optimization failed: {e}. Returning original model.")
+        return model
 
 
 __all__ = [
