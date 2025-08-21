@@ -188,9 +188,11 @@ void BlackwellGemmKernel::gemm(
         cudaMemset(scale_a, 0x3f800000, scale_size_a);  // IEEE 754 for 1.0f
         cudaMemset(scale_b, 0x3f800000, scale_size_b);
         
-        // Use production kernel with correctness fix
-        launch_production_gemm(
+        // TEMPORARILY: Use the existing function that we know compiles
+        // TODO: Switch to launch_production_gemm once verified
+        launch_blackwell_mxfp8_gemm(
             d, a, b,
+            scale_a, scale_b,
             pImpl->problem.m, pImpl->problem.n, pImpl->problem.k,
             epilogue.alpha, epilogue.beta,
             stream

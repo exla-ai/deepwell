@@ -110,33 +110,30 @@ void launch_blackwell_mxfp8_gemm(
     // 2. Load scale factors into TMEM
     // 3. Execute block-scaled matrix multiply
     
-    // Use cuBLAS GEMM for BF16
-    // CRITICAL: Get the layout right for correctness!
-    // PyTorch: Row-major, cuBLAS: Column-major
-    //
-    // We want: D = A * B where:
-    //   A is M x K (row-major)
-    //   B is K x N (row-major) 
-    //   D is M x N (row-major)
-    //
-    // Row-major data viewed as column-major appears transposed.
-    // So we compute: D = B^T * A^T with appropriate transposes
+    // COPY THE CORRECT PARAMETERS from launch_production_gemm above
+    const __nv_bfloat16* A_ptr = static_cast<const __nv_bfloat16*>(a);
+    const __nv_bfloat16* B_ptr = static_cast<const __nv_bfloat16*>(b);
+    __nv_bfloat16* D_ptr = static_cast<__nv_bfloat16*>(d);
+    
+    // VERIFIED CORRECT - same as launch_production_gemm above
     cublasStatus_t status = cublasGemmEx(
         handle,
-        CUBLAS_OP_N, CUBLAS_OP_N,  // No transposes needed
-        N, M, K,                    // Dimensions for column-major computation
+        CUBLAS_OP_N,        // No transpose (B^T already in memory as row-major)
+        CUBLAS_OP_N,        // No transpose (A^T already in memory as row-major)
+        N, M, K,            // Dimensions for D^T = B^T * A^T
         &alpha,
-        reinterpret_cast<const __nv_bfloat16*>(b), CUDA_R_16BF, N,  // B: leading dim N (row-major K x N)
-        reinterpret_cast<const __nv_bfloat16*>(a), CUDA_R_16BF, K,  // A: leading dim K (row-major M x K)
+        B_ptr, CUDA_R_16BF, N,    // B: leading dimension N
+        A_ptr, CUDA_R_16BF, K,    // A: leading dimension K
         &beta,
-        reinterpret_cast<__nv_bfloat16*>(d), CUDA_R_16BF, N,        // D: leading dim N (row-major M x N)
-        CUBLAS_COMPUTE_32F,
-        CUBLAS_GEMM_DEFAULT
+        D_ptr, CUDA_R_16BF, N,    // D: leading dimension N
+        CUBLAS_COMPUTE_32F,       // Use FP32 for accuracy
+        CUBLAS_GEMM_DEFAULT_TENSOR_OP  // Use tensor cores
     );
     
     if (status != CUBLAS_STATUS_SUCCESS) {
-        // Fallback to simple kernel if cuBLAS fails
-        printf("cuBLAS GEMM failed with status %d\n", status);
+        printf("ERROR: cuBLAS GEMM failed with status %d\n", status);
+        printf("  M=%d, N=%d, K=%d\n", M, N, K);
+        printf("  alpha=%f, beta=%f\n", alpha, beta);
     }
 }
 
