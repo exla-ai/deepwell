@@ -5,10 +5,9 @@ Deepwell kernel implementations for Blackwell GPUs.
 from .registry import KernelRegistry, register_kernel
 from .cutlass_bindings import (
     CutlassKernel,
-    GEMMKernel,
     GroupedGEMMKernel,
     CutlassConfig,
-    MicroscaleManager
+    BlackwellMMATensor
 )
 
 # Import tcgen05 operations if available
@@ -25,10 +24,9 @@ __all__ = [
     'KernelRegistry',
     'register_kernel',
     'CutlassKernel',
-    'GEMMKernel',
     'GroupedGEMMKernel', 
     'CutlassConfig',
-    'MicroscaleManager',
+    'BlackwellMMATensor',
     'TCGen05Ops',
     'BlackwellKernel',
     'TCGEN05_AVAILABLE',
