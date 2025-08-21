@@ -98,30 +98,38 @@ __global__ void quantize_to_mxfp8_kernel(
     
     // Thread 0 computes and stores the scale factor
     __shared__ float block_scale;
-    __shared__ cutlass::float_ue8m0_t scale_value;
+    __shared__ float inv_scale;
     
     if (tid == 0) {
-        // Compute scale as next power of 2 that fits max in E4M3 range
+        // Compute scale to fit the maximum value in E4M3 range
         if (local_max > 0) {
-            float scale_float = local_max / max_e4m3;
-            int exp = ceilf(log2f(scale_float));
-            exp = max(-127, min(128, exp));  // Clamp to E8M0 range
-            block_scale = ldexpf(1.0f, exp);
-            scale_value = cutlass::float_ue8m0_t(exp);
+            // E4M3 can represent values up to 448
+            // We want: max_val / scale <= 448
+            // So: scale >= max_val / 448
+            block_scale = local_max / max_e4m3;
+            
+            // Round to next power of 2 for E8M0 format
+            if (block_scale > 0) {
+                int exp = ceilf(log2f(block_scale));
+                block_scale = ldexpf(1.0f, exp);
+            } else {
+                block_scale = 1.0f;
+            }
+            inv_scale = 1.0f / block_scale;
         } else {
             block_scale = 1.0f;
-            scale_value = cutlass::float_ue8m0_t(0);
+            inv_scale = 1.0f;
         }
         
-        // Store scale factor in the layout expected by tcgen05.mma
-        // Scale layout depends on matrix dimensions and block position
+        // Store scale factor (for now as float, convert to E8M0 later)
         int scale_idx = block_row * num_blocks_per_row + block_col;
-        scales[scale_idx] = scale_value;
+        // Store as float for now to avoid E8M0 conversion issues
+        reinterpret_cast<float*>(scales)[scale_idx] = block_scale;
     }
     __syncthreads();
     
     // Phase 2: Quantize elements using the computed scale
-    float inv_scale = 1.0f / block_scale;
+    // inv_scale is already computed in shared memory
     
     for (int i = tid; i < block_elements; i += blockDim.x) {
         int col = col_start + i;
@@ -179,8 +187,8 @@ __global__ void dequantize_from_mxfp8_kernel(
     int num_blocks_per_row = (N + block_size - 1) / block_size;
     int scale_idx = row * num_blocks_per_row + block_col;
     
-    // Get scale factor
-    float scale = float(scales[scale_idx]);
+    // Get scale factor (stored as float for now)
+    float scale = reinterpret_cast<const float*>(scales)[scale_idx];
     
     // Dequantize
     float val = float(input[tid]) * scale;

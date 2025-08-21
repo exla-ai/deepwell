@@ -225,7 +225,7 @@ public:
         // Create output tensors
         torch::Tensor output = torch::empty_like(input, torch::kInt8);
         torch::Tensor scales = torch::empty({num_blocks}, 
-                                           torch::TensorOptions().dtype(torch::kInt8).device(input.device()));
+                                           torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
         
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
         MicroscaleManager::quantize_mxfp8(
