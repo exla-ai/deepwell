@@ -163,7 +163,7 @@ print("Building Deepwell CUTLASS Extensions")
 print("="*60)
 print(f"CUDA Available: {USE_CUDA}")
 if USE_CUDA:
-    print(f"CUDA Architecture: {cuda_arch}")
+    print(f"CUDA Architecture: {cuda_arch_flags}")
 print(f"CUTLASS Path: {CUTLASS_DIR}")
 print(f"Sources: {sources}")
 print("="*60 + "\n")
