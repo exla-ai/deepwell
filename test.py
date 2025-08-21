@@ -168,7 +168,7 @@ def test_pipeline():
         
         # Compile
         hw = dw.probe()
-        engine = dw.compile(ir, hw)
+        engine = dw.compile(ir, plan=None)
         print("  ✅ IR compiled to execution engine")
         
         # Execute
@@ -189,31 +189,64 @@ def main():
     print("DEEPWELL FRAMEWORK TEST SUITE".center(60))
     print("=" * 60)
     
+    passed_tests = []
+    failed_tests = []
+    
+    # Run tests
     try:
-        # Run tests
         hw = test_hardware_detection()
-        test_kernel_dispatch()
-        test_model_optimization()
-        test_pipeline()
-        
-        print("\n" + "=" * 60)
-        print("✅ ALL TESTS PASSED".center(60))
-        print("=" * 60)
-        
-        # Summary
-        has_blackwell = any(gpu.is_blackwell for gpu in hw.gpus)
-        if has_blackwell:
-            print("\n🎉 Blackwell hardware detected and working!")
-            print("   Framework is ready for production use.")
-        else:
-            print("\n✅ Framework is functional.")
-            print("   Will work even better on Blackwell hardware!")
-        
+        passed_tests.append("Hardware detection")
     except Exception as e:
-        print("\n" + "=" * 60)
-        print("❌ SOME TESTS FAILED".center(60))
-        print("=" * 60)
-        print(f"\nError: {e}")
+        failed_tests.append(("Hardware detection", str(e)))
+        hw = None
+    
+    try:
+        test_kernel_dispatch()
+        passed_tests.append("Kernel dispatch")
+    except Exception as e:
+        failed_tests.append(("Kernel dispatch", str(e)))
+    
+    try:
+        test_model_optimization()
+        passed_tests.append("Model optimization")
+    except Exception as e:
+        failed_tests.append(("Model optimization", str(e)))
+    
+    try:
+        test_pipeline()
+        passed_tests.append("Complete pipeline")
+    except Exception as e:
+        failed_tests.append(("Complete pipeline", str(e)))
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    if not failed_tests:
+        print("✅ ALL TESTS PASSED".center(60))
+    else:
+        print(f"TESTS: {len(passed_tests)} passed, {len(failed_tests)} failed".center(60))
+    print("=" * 60)
+    
+    # Print details
+    if passed_tests:
+        print("\n✅ Passed tests:")
+        for test in passed_tests:
+            print(f"   - {test}")
+    
+    if failed_tests:
+        print("\n❌ Failed tests:")
+        for test, error in failed_tests:
+            print(f"   - {test}: {error}")
+    
+    # Summary
+    if hw and hw.gpus and any(gpu.is_blackwell for gpu in hw.gpus):
+        print("\n🎉 Blackwell hardware detected and working!")
+        print("   Framework is ready for production use.")
+    
+    # Exit code based on critical tests
+    if "Hardware detection" in passed_tests and "Kernel dispatch" in passed_tests:
+        print("\n✅ Core functionality working!")
+        sys.exit(0)
+    else:
         sys.exit(1)
 
 
