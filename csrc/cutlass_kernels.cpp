@@ -343,9 +343,25 @@ void MicroscaleManager::quantize_mxfp8(
     cudaStream_t stream
 ) {
     // Use our real MXFP8 quantization kernel!
-    // Assuming 2D matrix for now - in production would handle arbitrary shapes
-    int M = 1;
-    int N = num_elements;
+    // For large tensors, use a reasonable 2D shape to avoid overflow
+    int M, N;
+    if (num_elements > 65536) {
+        // Find a reasonable factorization
+        M = 256;
+        while (num_elements % M != 0 && M < 4096) {
+            M *= 2;
+        }
+        if (num_elements % M == 0) {
+            N = num_elements / M;
+        } else {
+            // Fallback to 1D
+            M = 1;
+            N = num_elements;
+        }
+    } else {
+        M = 1;
+        N = num_elements;
+    }
     
     // Detect input type and dispatch to appropriate kernel
     // For now assume BF16 input (common for training)
@@ -361,8 +377,23 @@ void MicroscaleManager::dequantize_mxfp8(
     cudaStream_t stream
 ) {
     // Use our real MXFP8 dequantization kernel!
-    int M = 1;
-    int N = num_elements;
+    // Match the same shape as quantization
+    int M, N;
+    if (num_elements > 65536) {
+        M = 256;
+        while (num_elements % M != 0 && M < 4096) {
+            M *= 2;
+        }
+        if (num_elements % M == 0) {
+            N = num_elements / M;
+        } else {
+            M = 1;
+            N = num_elements;
+        }
+    } else {
+        M = 1;
+        N = num_elements;
+    }
     
     dequantize_from_mxfp8_bf16(output, input, scales, M, N, true, stream);
 }

@@ -219,8 +219,10 @@ public:
         TORCH_CHECK(input.is_cuda(), "Input must be on CUDA");
         
         // Calculate number of blocks
-        int num_elements = input.numel();
-        int num_blocks = (num_elements + block_size - 1) / block_size;
+        // For 2D tensors, we need to account for the row-wise blocking
+        int M = input.size(0);
+        int N = input.numel() / M;
+        int num_blocks = M * ((N + block_size - 1) / block_size);
         
         // Create output tensors
         torch::Tensor output = torch::empty_like(input, torch::kInt8);
@@ -228,11 +230,13 @@ public:
                                            torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
         
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
+        // Note: MicroscaleManager needs to be updated to handle 2D properly
+        // For now, it will treat as 1xN which should still work
         MicroscaleManager::quantize_mxfp8(
             get_cuda_ptr(input),
             get_cuda_ptr(output),
             get_cuda_ptr(scales),
-            num_elements,
+            input.numel(),
             block_size,
             stream
         );

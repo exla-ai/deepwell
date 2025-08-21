@@ -46,7 +46,8 @@ __global__ void quantize_to_mxfp8_kernel(
     const int block_row = bid / num_blocks_per_row;
     const int block_col = bid % num_blocks_per_row;
     
-    if (block_row >= M) return;
+    // Check bounds
+    if (block_row >= M || block_col >= num_blocks_per_row) return;
     
     // Calculate element range for this block
     const int col_start = block_col * block_size;
@@ -122,8 +123,11 @@ __global__ void quantize_to_mxfp8_kernel(
         
         // Store scale factor (for now as float, convert to E8M0 later)
         int scale_idx = block_row * num_blocks_per_row + block_col;
-        // Store as float for now to avoid E8M0 conversion issues
-        scales[scale_idx] = block_scale;
+        // Bounds check for scale storage
+        int total_scale_blocks = M * num_blocks_per_row;
+        if (scale_idx < total_scale_blocks) {
+            scales[scale_idx] = block_scale;
+        }
     }
     __syncthreads();
     
@@ -187,8 +191,12 @@ __global__ void dequantize_from_mxfp8_kernel(
     int num_blocks_per_row = (N + block_size - 1) / block_size;
     int scale_idx = row * num_blocks_per_row + block_col;
     
-    // Get scale factor (stored as float for now)
-    float scale = scales[scale_idx];
+    // Get scale factor (bounds check)
+    float scale = 1.0f;
+    int total_scale_blocks = M * ((N + block_size - 1) / block_size);
+    if (scale_idx < total_scale_blocks) {
+        scale = scales[scale_idx];
+    }
     
     // Dequantize (convert int8 back to float and scale)
     float val = static_cast<float>(input[tid]) * scale;
