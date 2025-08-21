@@ -79,18 +79,18 @@ class BenchmarkHarness:
 
 
 def benchmark_gemm(device='cuda'):
-    """Benchmark raw GEMM performance."""
+    """Benchmark raw GEMM performance with proper timing."""
     print("\n" + "=" * 70)
-    print("GEMM PERFORMANCE")
+    print("GEMM PERFORMANCE (vs torch.compile)")
     print("=" * 70)
     
     bench = BenchmarkHarness(device)
     
-    # Test different sizes
+    # Test different sizes with appropriate iteration counts
     configs = [
-        {"name": "Small", "m": 16384, "n": 3072, "k": 768},
-        {"name": "Medium", "m": 65536, "n": 4096, "k": 1024},
-        {"name": "Large", "m": 262144, "n": 5120, "k": 1280},
+        {"name": "Small", "m": 16384, "n": 3072, "k": 768, "iters": 1000},
+        {"name": "Medium", "m": 65536, "n": 4096, "k": 1024, "iters": 100},
+        {"name": "Large", "m": 262144, "n": 5120, "k": 1280, "iters": 10},
     ]
     
     for config in configs:
@@ -98,46 +98,66 @@ def benchmark_gemm(device='cuda'):
         print("-" * 40)
         
         m, n, k = config['m'], config['n'], config['k']
+        iterations = config['iters']
         
-        # PyTorch baseline
-        a = torch.randn(m, k, device=device, dtype=torch.float32)
-        b = torch.randn(k, n, device=device, dtype=torch.float32)
+        # Use BF16 for all tests (fair comparison)
+        a = torch.randn(m, k, device=device, dtype=torch.bfloat16)
+        b = torch.randn(k, n, device=device, dtype=torch.bfloat16)
         
+        # 1. PyTorch baseline
         pytorch_gemm = lambda x: torch.matmul(x, b)
-        pytorch_result = bench.measure(pytorch_gemm, a, iterations=100, name="PyTorch")
+        pytorch_result = bench.measure(pytorch_gemm, a, iterations=iterations, name="PyTorch")
         
-        # Calculate TFLOPS
-        flops = 2 * m * n * k
-        pytorch_tflops = (flops * 100) / (pytorch_result['total_time_s'] * 1e12)
-        print(f"    PyTorch: {pytorch_tflops:.2f} TFLOPS")
+        # 2. torch.compile baseline
+        compiled_gemm = torch.compile(pytorch_gemm, mode='max-autotune')
+        # Warmup compilation
+        _ = compiled_gemm(a)
+        compiled_result = bench.measure(compiled_gemm, a, iterations=iterations, name="torch.compile")
         
-        # CUTLASS if available
+        # 3. CUTLASS if available
         try:
             from deepwell import cutlass_kernels
             
             kernel = cutlass_kernels.BlackwellGemmKernel()
             kernel.initialize(m, n, k, "bf16", False, 32)
             
-            a_bf16 = a.to(torch.bfloat16)
-            b_bf16 = b.to(torch.bfloat16)
+            cutlass_gemm = lambda x: kernel.gemm(x, b)
+            cutlass_result = bench.measure(cutlass_gemm, a, iterations=iterations, name="CUTLASS")
             
-            cutlass_gemm = lambda x: kernel.gemm(x, b_bf16)
-            cutlass_result = bench.measure(cutlass_gemm, a_bf16, iterations=100, name="CUTLASS")
+            # Calculate metrics
+            flops = 2 * m * n * k
+            pytorch_tflops = (flops * iterations) / (pytorch_result['total_time_s'] * 1e12)
+            compiled_tflops = (flops * iterations) / (compiled_result['total_time_s'] * 1e12)
+            cutlass_tflops = (flops * iterations) / (cutlass_result['total_time_s'] * 1e12)
             
-            cutlass_tflops = (flops * 100) / (cutlass_result['total_time_s'] * 1e12)
-            speedup = pytorch_result['ms_per_iter'] / cutlass_result['ms_per_iter']
+            # Ensure we have meaningful timing (not 0.00)
+            if cutlass_result['ms_per_iter'] < 0.01:
+                print(f"    ⚠ Timing too fast, increasing iterations...")
+                # Re-run with more iterations
+                new_iters = iterations * 10
+                cutlass_result = bench.measure(cutlass_gemm, a, iterations=new_iters, name="CUTLASS")
+                cutlass_tflops = (flops * new_iters) / (cutlass_result['total_time_s'] * 1e12)
             
-            print(f"    CUTLASS: {cutlass_tflops:.2f} TFLOPS")
-            print(f"    Speedup: {speedup:.2f}x")
+            print(f"\n    Results:")
+            print(f"    PyTorch:      {pytorch_result['ms_per_iter']:.4f} ms/iter, {pytorch_tflops:.2f} TFLOPS")
+            print(f"    torch.compile: {compiled_result['ms_per_iter']:.4f} ms/iter, {compiled_tflops:.2f} TFLOPS")
+            print(f"    CUTLASS:      {cutlass_result['ms_per_iter']:.4f} ms/iter, {cutlass_tflops:.2f} TFLOPS")
+            
+            compile_speedup = pytorch_result['ms_per_iter'] / compiled_result['ms_per_iter']
+            cutlass_speedup = compiled_result['ms_per_iter'] / cutlass_result['ms_per_iter']
+            
+            print(f"\n    Speedups:")
+            print(f"    torch.compile vs PyTorch: {compile_speedup:.2f}x")
+            print(f"    CUTLASS vs torch.compile: {cutlass_speedup:.2f}x")
             
         except Exception as e:
-            print(f"    CUTLASS not available: {e}")
+            print(f"    CUTLASS error: {e}")
 
 
 def benchmark_model(model_size='small', device='cuda'):
-    """Benchmark a transformer model."""
+    """Benchmark a transformer model against torch.compile."""
     print("\n" + "=" * 70)
-    print(f"MODEL BENCHMARK ({model_size.upper()})")
+    print(f"TRANSFORMER MODEL BENCHMARK ({model_size.upper()})")
     print("=" * 70)
     
     # Create model based on size
@@ -172,25 +192,66 @@ def benchmark_model(model_size='small', device='cuda'):
             return self.output(x)
     
     bench = BenchmarkHarness(device)
-    model = TransformerModel().to(device)
     
     # Test input
     batch_size = 32
     seq_len = 512
     input_ids = torch.randint(0, 50257, (batch_size, seq_len), device=device)
     
-    # Baseline
-    baseline_result = bench.measure(model, input_ids, iterations=20, name="Baseline")
+    print(f"\nModel config:")
+    print(f"  Layers: {config['layers']}")
+    print(f"  Hidden dim: {config['hidden']}")
+    print(f"  Heads: {config['heads']}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Sequence length: {seq_len}")
     
-    # Optimized with Deepwell
+    # 1. PyTorch baseline
+    model = TransformerModel().to(device)
+    baseline_result = bench.measure(model, input_ids, iterations=10, name="PyTorch")
+    
+    # 2. torch.compile baseline
+    compiled_model = torch.compile(model, mode='max-autotune')
+    # Trigger compilation
+    _ = compiled_model(input_ids)
+    compiled_result = bench.measure(compiled_model, input_ids, iterations=10, name="torch.compile")
+    
+    # 3. Deepwell optimized
     try:
-        optimized_model = dw.optimize_for_blackwell(model)
-        opt_result = bench.measure(optimized_model, input_ids, iterations=20, name="Deepwell")
+        # Create fresh model for Deepwell
+        model_for_deepwell = TransformerModel().to(device)
+        optimized_model = dw.optimize_for_blackwell(model_for_deepwell)
+        opt_result = bench.measure(optimized_model, input_ids, iterations=10, name="Deepwell")
         
-        speedup = baseline_result['ms_per_iter'] / opt_result['ms_per_iter']
-        print(f"\n    Speedup: {speedup:.2f}x")
+        # Calculate speedups
+        compile_vs_pytorch = baseline_result['ms_per_iter'] / compiled_result['ms_per_iter']
+        deepwell_vs_pytorch = baseline_result['ms_per_iter'] / opt_result['ms_per_iter']
+        deepwell_vs_compile = compiled_result['ms_per_iter'] / opt_result['ms_per_iter']
+        
+        # Calculate throughput
+        tokens_per_iter = batch_size * seq_len
+        pytorch_throughput = tokens_per_iter / (baseline_result['ms_per_iter'] / 1000)
+        compile_throughput = tokens_per_iter / (compiled_result['ms_per_iter'] / 1000)
+        deepwell_throughput = tokens_per_iter / (opt_result['ms_per_iter'] / 1000)
+        
+        print(f"\nResults:")
+        print(f"  PyTorch:       {baseline_result['ms_per_iter']:.2f} ms/iter ({pytorch_throughput:.0f} tokens/sec)")
+        print(f"  torch.compile: {compiled_result['ms_per_iter']:.2f} ms/iter ({compile_throughput:.0f} tokens/sec)")
+        print(f"  Deepwell:      {opt_result['ms_per_iter']:.2f} ms/iter ({deepwell_throughput:.0f} tokens/sec)")
+        
+        print(f"\nSpeedups:")
+        print(f"  torch.compile vs PyTorch: {compile_vs_pytorch:.2f}x")
+        print(f"  Deepwell vs PyTorch:      {deepwell_vs_pytorch:.2f}x")
+        print(f"  Deepwell vs torch.compile: {deepwell_vs_compile:.2f}x")
+        
+        if deepwell_vs_compile > 1.0:
+            print(f"\n✅ Deepwell is {deepwell_vs_compile:.2f}x faster than torch.compile!")
+        elif deepwell_vs_compile > 0.9:
+            print(f"\n✓ Deepwell matches torch.compile performance")
+        else:
+            print(f"\n⚠ torch.compile is currently faster")
+            
     except Exception as e:
-        print(f"    Could not optimize: {e}")
+        print(f"\n❌ Deepwell optimization failed: {e}")
     
     return baseline_result
 
