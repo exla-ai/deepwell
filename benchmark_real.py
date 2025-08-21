@@ -124,6 +124,14 @@ class OptimizedGEMM(nn.Module):
 def create_transformer_block(hidden_dim=768, num_heads=12):
     """Create a realistic transformer block."""
     
+    # Adjust num_heads to be compatible with hidden_dim
+    if hidden_dim % num_heads != 0:
+        # Find the largest divisor <= 32
+        for h in range(min(32, hidden_dim), 0, -1):
+            if hidden_dim % h == 0:
+                num_heads = h
+                break
+    
     class TransformerBlock(nn.Module):
         def __init__(self):
             super().__init__()
