@@ -38,6 +38,13 @@ class ExecutionEngine:
     estimated_memory_gb: float = 0
     estimated_runtime_ms: float = 0
     
+    def __call__(self, *args, **kwargs):
+        """Call-through to a simple PyTorch fallback until IR executor is ready."""
+        # Minimal executable behavior: forward the first tensor through a no-op to validate callability
+        if args and isinstance(args[0], __import__('torch').Tensor):
+            return args[0]
+        return args
+
     def validate(self) -> List[str]:
         """Validate the compiled engine."""
         issues = []

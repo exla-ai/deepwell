@@ -48,8 +48,16 @@ class ExecutableModel(nn.Module):
         # For now, we'll dispatch based on kernel type
         # In a full implementation, this would follow the IR graph
         
-        if self.use_cutlass and any(op.kernel and op.kernel.backend.value == "cutlass" 
-                                    for op in self.engine.compiled_ops):
+        # Only use CUTLASS fast-path for token inputs typical of transformer models
+        # For generic tensor models (e.g., MLPs), fall back to the original model to avoid
+        # mismatches until full IR-driven execution is implemented
+        if (
+            self.use_cutlass
+            and len(inputs) > 0
+            and isinstance(inputs[0], torch.Tensor)
+            and inputs[0].dtype == torch.long
+            and any(op.kernel and op.kernel.backend.value == "cutlass" for op in self.engine.compiled_ops)
+        ):
             return self._execute_with_cutlass(inputs[0])
         else:
             # Fallback to original model
