@@ -26,6 +26,18 @@ from .precision.policy import (
 from .kernels.registry import KernelRegistry, KernelSpec, get_registry
 from .kernels.cutlass_bindings import CutlassKernel, GroupedGEMMKernel
 
+# Import C++ extension if available
+try:
+    from . import cutlass_kernels
+except ImportError:
+    try:
+        # Try alternate import path
+        import deepwell.cutlass_kernels as cutlass_kernels
+    except ImportError:
+        import warnings
+        warnings.warn("cutlass_kernels C++ extension not found. Build with: python setup.py build_ext --inplace")
+        cutlass_kernels = None
+
 # Planning (to be implemented)
 def autoplan(ir: IR, 
             hw: HardwareConfig,
@@ -281,6 +293,9 @@ __all__ = [
     'PrecisionPolicy',
     'PrecisionConfig',
     'KernelRegistry',
+    
+    # C++ extension
+    'cutlass_kernels',
     
     # Convenience
     'optimize_for_blackwell',
