@@ -245,29 +245,27 @@ def test_end_to_end():
     model = SimpleTransformer(hidden_dim=768, num_heads=12, num_layers=12)
     
     # One-shot optimization
-    engine = dw.optimize_for_blackwell(
+    optimized = dw.optimize_for_blackwell(
         model,
         precision="mxfp8",
         seq_len=2048,
-        batch_size=32
+        batch_size=32,
     )
-    
-    print(f"Model optimized for Blackwell!")
-    
-    # Dry run
-    results = dw.dryrun(engine)
-    print(f"\nDry run results:")
-    print(f"  Memory: {results['memory_gb']:.2f} GB")
-    print(f"  Runtime: {results['runtime_ms']:.2f} ms")
-    print(f"  Status: {results['status']}")
-    
-    # Export
-    metadata = dw.export(engine, "test_model.engine")
-    print(f"\nExported engine metadata:")
-    for key, value in metadata.items():
-        print(f"  {key}: {value}")
-    
-    return engine
+
+    print("Model optimized for Blackwell!")
+
+    # Ensure the optimized model is trainable by running a single training step
+    optimizer = torch.optim.SGD(optimized.parameters(), lr=0.01)
+    dummy_input = torch.randint(0, 50257, (2, 16))
+    before = optimized.embed.weight.clone()
+    optimizer.zero_grad()
+    output = optimized(dummy_input)
+    loss = output.sum()
+    loss.backward()
+    optimizer.step()
+
+    # Verify that parameters were updated
+    assert not torch.allclose(before, optimized.embed.weight)
 
 
 def main():

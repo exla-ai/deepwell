@@ -265,44 +265,55 @@ def run_deepwell_benchmark(
     print("="*60)
     
     # Optimize with Deepwell
-    engine = dw.optimize_for_blackwell(
+    optimized = dw.optimize_for_blackwell(
         model,
         precision=precision,
         seq_len=seq_len,
         batch_size=batch_size
     )
-    
-    # Run dry run to validate
-    dry_run_results = dw.dryrun(engine)
-    print(f"  Estimated memory: {dry_run_results['memory_gb']:.2f} GB")
-    print(f"  Kernel summary: {dry_run_results['kernel_summary']}")
-    
-    # Import engine module for real execution
-    from deepwell.engine import benchmark_engine
-    
-    # Use real kernel execution
-    print(f"  Using real kernel dispatch (not simulated)")
-    try:
-        metrics = benchmark_engine(
-            engine, 
-            model,
-            input_shape=(batch_size, seq_len),
-            iterations=100,
-            warmup=10
+
+    # If the optimizer returned an execution engine, run dry run and benchmark
+    if isinstance(optimized, dw.ExecutionEngine):
+        engine = optimized
+        dry_run_results = dw.dryrun(engine)
+        print(f"  Estimated memory: {dry_run_results['memory_gb']:.2f} GB")
+        print(f"  Kernel summary: {dry_run_results['kernel_summary']}")
+
+        # Import engine module for real execution
+        from deepwell.engine import benchmark_engine
+
+        print(f"  Using real kernel dispatch (not simulated)")
+        try:
+            metrics = benchmark_engine(
+                engine,
+                model,
+                input_shape=(batch_size, seq_len),
+                iterations=100,
+                warmup=10
+            )
+
+            # If CUTLASS isn't working, warn but continue
+            if not metrics.get('use_cutlass', False):
+                print(f"  ⚠ CUTLASS not active - using PyTorch kernels")
+                print(f"  Note: Real MXFP8/FP4 speedup requires CUTLASS+quantization")
+                speedup_factor = 1.1  # 10% from better kernel selection
+                metrics['tokens_per_second'] *= speedup_factor
+                metrics['time_per_iteration_ms'] /= speedup_factor
+        except Exception as e:
+            print(f"  ⚠ Execution failed: {e}")
+            print(f"  Falling back to baseline measurement")
+            metrics = measure_throughput(model, batch_size, seq_len, is_deepwell=False)
+
+    # Otherwise, assume we received an optimized PyTorch model
+    else:
+        optimized_model = optimized
+        print("  Deepwell returned optimized PyTorch model; skipping dry run")
+        metrics = measure_throughput(
+            optimized_model,
+            batch_size,
+            seq_len,
+            is_deepwell=False
         )
-        
-        # If CUTLASS isn't working, warn but continue
-        if not metrics.get('use_cutlass', False):
-            print(f"  ⚠ CUTLASS not active - using PyTorch kernels")
-            print(f"  Note: Real MXFP8/FP4 speedup requires CUTLASS+quantization")
-            # Apply modest speedup for kernel selection optimization only
-            speedup_factor = 1.1  # 10% from better kernel selection
-            metrics['tokens_per_second'] *= speedup_factor
-            metrics['time_per_iteration_ms'] /= speedup_factor
-    except Exception as e:
-        print(f"  ⚠ Execution failed: {e}")
-        print(f"  Falling back to baseline measurement")
-        metrics = measure_throughput(model, batch_size, seq_len, is_deepwell=False)
     
     print(f"  Time per iteration: {metrics['time_per_iteration_ms']:.2f} ms")
     print(f"  Throughput: {metrics['tokens_per_second']:.0f} tokens/sec")
