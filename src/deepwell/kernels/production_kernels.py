@@ -8,6 +8,12 @@ import torch.nn as nn
 from typing import Optional, Dict, Tuple, Any
 from dataclasses import dataclass
 import functools
+try:
+    # Optional CUTLASS-backed FlashAttention wrapper (falls back internally)
+    from .blackwell_production import BlackwellFlashAttention, BlackwellConfig, DWSelfAttention
+    _HAS_BW_FLASH = True
+except Exception:
+    _HAS_BW_FLASH = False
 
 
 @dataclass
@@ -231,8 +237,8 @@ class OptimizedTransformerBlock(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.norm2 = nn.LayerNorm(hidden_dim)
         
-        # Attention (could use Flash Attention here)
-        self.attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+        # Attention (replaced by optimized module in optimize_model_inplace)
+        self.attn = DWSelfAttention(hidden_dim, num_heads, BlackwellConfig())
         
         # MLP with optimized kernels
         self.mlp = OptimizedMLP(hidden_dim, kernel_manager=self.kernel_manager)
@@ -255,6 +261,95 @@ class OptimizedTransformerBlock(nn.Module):
         return x
 
 
+class OptimizedMultiheadAttention(nn.Module):
+    """
+    Optimized MHA using CUTLASS FMHA only (no SDPA fallback).
+    Drop-in for nn.MultiheadAttention (batch_first=True expected).
+    """
+    def __init__(self, embed_dim: int, num_heads: int,
+                 kernel_manager: ProductionKernelManager = None):
+        super().__init__()
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.kernel_manager = kernel_manager or ProductionKernelManager()
+
+        # Use optimized Linear for QKV and output to leverage GEMM speedups
+        self.q_proj = OptimizedLinear(embed_dim, embed_dim, kernel_manager=self.kernel_manager)
+        self.k_proj = OptimizedLinear(embed_dim, embed_dim, kernel_manager=self.kernel_manager)
+        self.v_proj = OptimizedLinear(embed_dim, embed_dim, kernel_manager=self.kernel_manager)
+        self.out_proj = OptimizedLinear(embed_dim, embed_dim, kernel_manager=self.kernel_manager)
+
+        # Flash attention backend
+        if not _HAS_BW_FLASH:
+            raise RuntimeError("CUTLASS FMHA not available; install proper CUTLASS or enable native FMHA.")
+        self.flash = BlackwellFlashAttention(BlackwellConfig())
+
+    @torch.no_grad()
+    def load_from_mha(self, mha: nn.MultiheadAttention):
+        """Copy weights from an existing nn.MultiheadAttention instance."""
+        # PyTorch packs QKV into a single in_proj_weight [3*E, E]
+        in_w = mha.in_proj_weight.detach().clone()  # [3*E, E]
+        in_b = mha.in_proj_bias.detach().clone() if mha.in_proj_bias is not None else None
+        q_w, k_w, v_w = in_w.split(self.embed_dim, dim=0)
+        if in_b is not None:
+            q_b, k_b, v_b = in_b.split(self.embed_dim, dim=0)
+        else:
+            q_b = k_b = v_b = None
+
+        # Assign to separate projections (note weight shapes are [out, in])
+        self.q_proj.weight.data.copy_(q_w)
+        self.k_proj.weight.data.copy_(k_w)
+        self.v_proj.weight.data.copy_(v_w)
+        if q_b is not None:
+            self.q_proj.bias.data.copy_(q_b)
+            self.k_proj.bias.data.copy_(k_b)
+            self.v_proj.bias.data.copy_(v_b)
+
+        # Out projection
+        self.out_proj.weight.data.copy_(mha.out_proj.weight.detach())
+        if mha.out_proj.bias is not None and self.out_proj.bias is not None:
+            self.out_proj.bias.data.copy_(mha.out_proj.bias.detach())
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        need_weights: bool = False,
+        attn_mask: Optional[torch.Tensor] = None,
+        is_causal: bool = False,
+    ):
+        # Expect batch_first=True tensors: [batch, seq, embed]
+        batch, q_seq, _ = query.shape
+        _, k_seq, _ = key.shape
+        _, v_seq, _ = value.shape
+
+        q_lin = self.q_proj(query)
+        k_lin = self.k_proj(key)
+        v_lin = self.v_proj(value)
+
+        # Reshape to [batch, heads, seq, head_dim]
+        def split_heads(t, seq_len):
+            return t.view(batch, seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        qh = split_heads(q_lin, q_seq)
+        kh = split_heads(k_lin, k_seq)
+        vh = split_heads(v_lin, v_seq)
+
+        # CUTLASS FMHA path (strict bf16 + contiguous + layout)
+        qh = qh.to(torch.bfloat16).contiguous()
+        kh = kh.to(torch.bfloat16).contiguous()
+        vh = vh.to(torch.bfloat16).contiguous()
+        out = self.flash.forward(qh, kh, vh, causal=is_causal)
+
+        # Merge heads back: [batch, seq, embed]
+        out = out.permute(0, 2, 1, 3).contiguous().view(batch, q_seq, self.embed_dim)
+        out = self.out_proj(out)
+        return (out, None) if need_weights else (out, None)
+
+
 def optimize_model_inplace(model: nn.Module, 
                           config: KernelConfig = None) -> nn.Module:
     """
@@ -269,8 +364,11 @@ def optimize_model_inplace(model: nn.Module,
     """
     kernel_manager = ProductionKernelManager(config)
     
-    # Replace all Linear layers with OptimizedLinear
+    # Replace all Linear layers with OptimizedLinear; replace MHA with optimized version
     def replace_module(parent, name, module):
+        # Do not replace internals of DWSelfAttention to preserve strict FMHA contract
+        if isinstance(parent, DWSelfAttention):
+            return False
         if isinstance(module, nn.Linear):
             # Create optimized replacement
             optimized = OptimizedLinear(
@@ -287,6 +385,11 @@ def optimize_model_inplace(model: nn.Module,
             
             # Replace in parent
             setattr(parent, name, optimized)
+            return True
+        if isinstance(module, nn.MultiheadAttention):
+            # Strict CUTLASS FMHA-only attention
+            strict_attn = DWSelfAttention(module.embed_dim, module.num_heads, BlackwellConfig())
+            setattr(parent, name, strict_attn)
             return True
         
         # Recursively replace in children

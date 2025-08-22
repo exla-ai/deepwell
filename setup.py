@@ -13,6 +13,7 @@ import torch
 ROOT_DIR = Path(__file__).parent
 CSRC_DIR = ROOT_DIR / "csrc"
 CUTLASS_DIR = Path(os.environ.get("CUTLASS_PATH", "/usr/local/cutlass"))
+LOCAL_CUTLASS = ROOT_DIR / "third_party" / "cutlass"
 
 # Check for CUDA
 if not torch.cuda.is_available():
@@ -33,16 +34,17 @@ if USE_CUDA:
         if result.returncode == 0:
             compute_cap = result.stdout.strip().replace(".", "")
             # Convert to CUDA arch flags (as a list)
-            cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
-            
-            # Add PTX for forward compatibility
-            if int(compute_cap) >= 100:  # Blackwell
-                # For Blackwell, add SM100a support
-                cuda_arch_flags.append(f"-gencode=arch=compute_100,code=sm_100a")
-                print(f"Detected Blackwell GPU (SM{compute_cap})")
-            elif int(compute_cap) >= 90:  # Hopper
-                cuda_arch_flags.append(f"-gencode=arch=compute_90,code=sm_90a")
-                print(f"Detected Hopper GPU (SM{compute_cap})")
+            if int(compute_cap) >= 100:
+                # For Blackwell tcgen05.mma, target only SM100a to allow tcgen05 instructions
+                cuda_arch_flags = ["-arch=sm_100a", "-gencode=arch=compute_100,code=sm_100a"]
+                print(f"Detected Blackwell GPU (SM{compute_cap}) -> using sm_100a only")
+            else:
+                cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
+                
+                # Add PTX for forward compatibility
+                if int(compute_cap) >= 90:  # Hopper
+                    cuda_arch_flags.append(f"-gencode=arch=compute_90,code=sm_90a")
+                    print(f"Detected Hopper GPU (SM{compute_cap})")
         else:
             # Default to common architectures
             cuda_arch_flags = ["-gencode=arch=compute_80,code=sm_80"]
@@ -61,7 +63,8 @@ sources = [
 # Add CUDA kernel sources if CUDA is available
 if USE_CUDA:
     cuda_sources = [
-        "blackwell_gemm_kernel.cu",  # Main kernel with correctness fix
+        # Temporarily exclude problematic GEMM kernel; rely on FMHA + PyTorch/CUTLASS Python
+        # "blackwell_gemm_kernel.cu",
         "mxfp8_quantization.cu"
     ]
     for cuda_file in cuda_sources:
@@ -87,6 +90,15 @@ else:
         include_dirs.extend([
             str(system_cutlass / "include"),
             str(system_cutlass / "tools/util/include"),
+        ])
+    # Try local third_party CUTLASS clone
+    if LOCAL_CUTLASS.exists():
+        include_dirs.extend([
+            str(LOCAL_CUTLASS / "include"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
         ])
     # If no CUTLASS found, that's OK - we can still build without it
 
@@ -115,11 +127,15 @@ extra_compile_args = {
         "--expt-relaxed-constexpr",
         "--expt-extended-lambda",
         "--use_fast_math",
+        "-rdc=true",
         *cuda_arch_flags,  # Unpack the list of arch flags
         "-DUSE_CUTLASS",
         "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
         "-DCUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES=1",
         "-DCUTLASS_ENABLE_SM100_TCGEN05=1",
+        "-DCUTE_ARCH_TMA_SM100_ENABLED=1",
+        "-DCUTE_ARCH_TMA_SM90_ENABLED=1",
+        "-DCUTLASS_ENABLE_SYNCLOG=0",
     ],
 }
 
@@ -136,6 +152,19 @@ if USE_CUDA:
             extra_link_args=["-Wl,-rpath,$ORIGIN"],
         )
     ]
+    # Build a separate FMHA module if wrapper is present and explicitly enabled
+    if os.environ.get("DW_BUILD_FMHA", "0") == "1" and (CSRC_DIR / "fmha_blackwell.cu").exists():
+        ext_modules.append(
+            cpp_extension.CUDAExtension(
+                name="deepwell_fmha",
+                sources=[str(CSRC_DIR / "fmha_blackwell.cu")],
+                include_dirs=include_dirs,
+                libraries=libraries + ["cudadevrt"],
+                library_dirs=library_dirs,
+                extra_compile_args=extra_compile_args,
+                extra_link_args=["-Wl,-rpath,$ORIGIN"],
+            )
+        )
 else:
     ext_modules = [
         cpp_extension.CppExtension(

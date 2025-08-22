@@ -1,3 +1,6 @@
+# third-party dependencies
+third_party/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

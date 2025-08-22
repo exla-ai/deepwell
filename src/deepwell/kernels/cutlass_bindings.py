@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import warnings
 import torch
 from packaging import version
+import os
 
 # Try to import CUTLASS Python API for production kernels
 try:
@@ -31,6 +32,18 @@ try:
 except ImportError:
     _cutlass_ext = None
     CUTLASS_CPP_AVAILABLE = False
+
+# Try to import our native FMHA extension if built
+try:
+    from importlib.util import spec_from_file_location, module_from_spec
+    # Torch will have registered under the built module name; try import by package first
+    try:
+        import deepwell_fmha as _dw_fmha
+    except Exception:
+        _dw_fmha = None
+    FMHA_NATIVE = _dw_fmha
+except Exception:
+    FMHA_NATIVE = None
 
 # Determine which backend is available
 CUTLASS_AVAILABLE = CUTLASS_PYTHON_AVAILABLE or CUTLASS_CPP_AVAILABLE

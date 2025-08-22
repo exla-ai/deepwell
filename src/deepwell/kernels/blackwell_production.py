@@ -16,24 +16,34 @@ from typing import Optional, Tuple, List
 import warnings
 from dataclasses import dataclass
 import math
+import os
 
 # Try to import CUTLASS Python API
+_CUTLASS_PY_AVAILABLE = False
 try:
     import cutlass
     from cutlass import *
-    from cutlass.op import Gemm, GroupedGemm
-    from cutlass.backend import get_memory_capacity, get_memory_space
-    CUTLASS_AVAILABLE = True
-except ImportError:
-    CUTLASS_AVAILABLE = False
+    try:
+        from cutlass.op import Gemm, GroupedGemm  # Newer builder API
+        _CUTLASS_PY_AVAILABLE = True
+    except Exception:
+        _CUTLASS_PY_AVAILABLE = False
+except Exception:
+    _CUTLASS_PY_AVAILABLE = False
     warnings.warn("CUTLASS Python API not available. Install with: pip install nvidia-cutlass")
 
-# Try our C++ extension as fallback
+# Try our C++/bindings fallback (pycutlass-backed GEMM wrappers)
 try:
     import deepwell.cutlass_kernels as cutlass_ext
     CUTLASS_CPP_AVAILABLE = True
 except ImportError:
     CUTLASS_CPP_AVAILABLE = False
+
+from .cutlass_bindings import CutlassKernel as _DW_CutlassKernel, CUTLASS_PYTHON_AVAILABLE as _DW_CUTLASS_PY_OK, CUTLASS_CPP_AVAILABLE as _DW_CUTLASS_CPP_OK
+from .cutlass_bindings import FMHA_NATIVE as _DW_FMHA
+
+# Effective availability for production paths
+CUTLASS_AVAILABLE = _CUTLASS_PY_AVAILABLE or _DW_CUTLASS_PY_OK or CUTLASS_CPP_AVAILABLE or _DW_CUTLASS_CPP_OK
 
 
 @dataclass
@@ -275,12 +285,39 @@ class BlackwellFlashAttention:
     
     def __init__(self, config: BlackwellConfig):
         self.config = config
-        
-        if not CUTLASS_AVAILABLE:
-            # Fall back to PyTorch implementation
-            self.use_pytorch = True
-        else:
-            self.use_pytorch = False
+        self.use_pytorch = False
+        self._FlashAttention = None
+        # Prefer shared FMHA bridge if present and enabled
+        self._fmha_bridge = None
+        if os.environ.get("DW_ENABLE_FMHA_BRIDGE", "0") == "1":
+            try:
+                import ctypes
+                # Prefer DW_FMHA_BRIDGE_PATH if set, otherwise use default
+                bridge_path = os.environ.get("DW_FMHA_BRIDGE_PATH")
+                if not bridge_path:
+                    bridge_path = '/root/deepwell/third_party/cutlass/build/examples/77_blackwell_fmha/libdw_fmha_bridge.so'
+                if os.environ.get("DW_FMHA_DEBUG") == "1":
+                    print(f"[DW_FMHA] Loading bridge from: {bridge_path}")
+                _bridge = ctypes.CDLL(bridge_path)
+                self._fmha_bridge = _bridge
+            except Exception as e:
+                if os.environ.get("DW_FMHA_DEBUG") == "1":
+                    print(f"[DW_FMHA] Failed to load bridge: {e}")
+                self._fmha_bridge = None
+        self._fmha_native = _DW_FMHA
+        # Gate old native FMHA behind env flag (default off)
+        if os.environ.get("DW_USE_NATIVE_FMHA", "0") != "1":
+            self._fmha_native = None
+        if CUTLASS_AVAILABLE and _CUTLASS_PY_AVAILABLE:
+            try:
+                from cutlass.op import FlashAttention as _FA
+                self._FlashAttention = _FA
+            except Exception:
+                self._FlashAttention = None
+        # Bridge is used in forward(); prefer native if explicitly enabled
+        if self._fmha_native is not None:
+            # Prefer native C++ extension if available and enabled
+            self._FlashAttention = None
     
     def forward(self,
                 q: torch.Tensor,
@@ -292,17 +329,68 @@ class BlackwellFlashAttention:
         
         batch_size, num_heads, seq_len, head_dim = q.shape
         
-        if self.use_pytorch:
-            # PyTorch fallback
-            return torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, is_causal=causal, dropout_p=dropout_p
-            )
-        
-        # CUTLASS Flash Attention
-        # Based on example 77_blackwell_fmha
-        from cutlass.op import FlashAttention
-        
-        operation = FlashAttention(
+        # No Triton fallback; strictly use CUTLASS FMHA (bridge/native/python)
+
+        # Validate and normalize inputs
+        if q.dtype != torch.bfloat16 or k.dtype != torch.bfloat16 or v.dtype != torch.bfloat16:
+            q = q.to(torch.bfloat16)
+            k = k.to(torch.bfloat16)
+            v = v.to(torch.bfloat16)
+        if not q.is_contiguous(): q = q.contiguous()
+        if not k.is_contiguous(): k = k.contiguous()
+        if not v.is_contiguous(): v = v.contiguous()
+
+        # Bridge constraints (conservative): D in {64,128}, S multiple of 64
+        shape_supported = (head_dim in (64, 128)) and (seq_len % 64 == 0)
+        if not shape_supported:
+            raise RuntimeError(f"CUTLASS FMHA requires head_dim in {64,128} and seq multiple of 64; got H={num_heads} S={seq_len} D={head_dim}")
+
+        # Lazy-load bridge if not already loaded
+        if getattr(self, "_fmha_bridge", None) is None and os.environ.get("DW_ENABLE_FMHA_BRIDGE", "0") == "1":
+            try:
+                import ctypes
+                _bridge = ctypes.CDLL('/root/deepwell/third_party/cutlass/build/examples/77_blackwell_fmha/libdw_fmha_bridge.so')
+                self._fmha_bridge = _bridge
+            except Exception:
+                self._fmha_bridge = None
+
+        # Prefer ctypes FMHA bridge if available
+        if getattr(self, "_fmha_bridge", None) is not None:
+            import ctypes
+            qb = q
+            kb = k
+            vb = v
+            out = torch.empty_like(qb)
+            B,H,S,D = qb.shape
+            fn = self._fmha_bridge.dw_fmha_bf16_forward
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                           ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                           ctypes.c_int]
+            ret = fn(qb.data_ptr(), kb.data_ptr(), vb.data_ptr(), out.data_ptr(),
+                     int(B), int(H), int(S), int(S), int(D), int(bool(causal)))
+            if ret != 0:
+                if os.environ.get("DW_FMHA_DEBUG", "0") == "1":
+                    print(f"[DW_FMHA] bridge ret={ret} B={B} H={H} S={S} D={D} causal={causal}")
+                raise RuntimeError(f"dw_fmha_bf16_forward failed: {ret}")
+            if os.environ.get("DW_FMHA_DEBUG", "0") == "1":
+                print("[DW_FMHA] path=bridge bf16")
+            return out
+
+        # CUTLASS Flash Attention (only if builder is available)
+        if self._fmha_native is not None:
+            # Expect [B,H,S,D] layout with bf16
+            qb = q.to(torch.bfloat16)
+            kb = k.to(torch.bfloat16)
+            vb = v.to(torch.bfloat16)
+            out = self._fmha_native.fmha_forward_bf16(qb.contiguous(), kb.contiguous(), vb.contiguous(), causal)
+            if os.environ.get("DW_FMHA_DEBUG", "0") == "1":
+                print("[DW_FMHA] path=native bf16")
+            return out
+        if self._FlashAttention is None:
+            # No FMHA backend available
+            raise RuntimeError("CUTLASS FMHA not available: install a CUTLASS Python wheel exposing FlashAttention or enable DW_USE_NATIVE_FMHA shared lib.")
+
+        operation = self._FlashAttention(
             arch=100,
             head_dim=head_dim,
             num_heads=num_heads,
@@ -312,14 +400,51 @@ class BlackwellFlashAttention:
             element_v=cutlass.bfloat16,
             element_o=cutlass.bfloat16,
         )
-        
+
         plan = cutlass.op.build(operation)
-        
-        # Execute
+
         output = torch.empty_like(q)
         plan.run(q, k, v, output)
-        
+        if os.environ.get("DW_FMHA_DEBUG", "0") == "1":
+            print("[DW_FMHA] path=cutlass_python bf16")
         return output
+
+
+class DWSelfAttention(nn.Module):
+    """
+    Self-attention module that strictly uses CUTLASS FMHA (no SDPA fallback).
+    Replaces `nn.MultiheadAttention` during optimization.
+    """
+    def __init__(self, embed_dim: int, num_heads: int, config: BlackwellConfig):
+        super().__init__()
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
+        self.flash = BlackwellFlashAttention(config)
+
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # x: [batch, seq, embed]
+        batch, seq, _ = x.shape
+        # Ensure bf16 activations to match FMHA expectations
+        x = x.to(torch.bfloat16)
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+        # [B,S,E] -> [B,H,S,D]
+        def split_heads(t):
+            return t.view(batch, seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        q = split_heads(q)
+        k = split_heads(k)
+        v = split_heads(v)
+        o = self.flash.forward(q, k, v, causal=True)
+        # [B,H,S,D] -> [B,S,E]
+        o = o.permute(0, 2, 1, 3).contiguous().view(batch, seq, self.embed_dim)
+        return self.out_proj(o)
 
 
 class FusedLinearGELU(nn.Module):

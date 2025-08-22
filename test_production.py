@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import sys
+import pytest
 
 def test_gemm_correctness():
     """Test GEMM kernel correctness."""
@@ -83,6 +84,13 @@ def test_fused_operations():
     print("\n" + "=" * 70)
     print("TESTING FUSED OPERATIONS")
     print("=" * 70)
+    # Skip if CUTLASS Python API is not available
+    try:
+        import deepwell.kernels.blackwell_production as bp
+        if not getattr(bp, "CUTLASS_AVAILABLE", False):
+            pytest.skip("CUTLASS Python API not available")
+    except Exception:
+        pytest.skip("CUTLASS Python API not available")
     
     batch_size = 32
     seq_len = 512
@@ -97,30 +105,27 @@ def test_fused_operations():
     # Reference
     ref_output = torch.nn.functional.gelu(linear(x))
     
-    try:
-        from deepwell.kernels.blackwell_production import FusedLinearGELU, BlackwellConfig
-        
-        config = BlackwellConfig()
-        fused = FusedLinearGELU(hidden_dim, hidden_dim * 4, config).cuda()
-        
-        # Copy weights
-        fused.weight.data = linear.weight.data
-        fused.bias.data = linear.bias.data
-        
-        # Execute
-        fused_output = fused(x)
-        
-        # Check
-        diff = torch.abs(ref_output - fused_output).max().item()
-        print(f"  Max difference: {diff:.6f}")
-        
-        if diff < 0.01:
-            print(f"  ✅ PASSED")
-        else:
-            print(f"  ❌ FAILED")
-            
-    except ImportError:
-        print("  ⚠ Fused kernels not available yet")
+    from deepwell.kernels.blackwell_production import FusedLinearGELU, BlackwellConfig
+    
+    config = BlackwellConfig()
+    fused = FusedLinearGELU(hidden_dim, hidden_dim * 4, config).cuda()
+    
+    # Copy weights
+    fused.weight.data = linear.weight.data
+    fused.bias.data = linear.bias.data
+    
+    # Execute
+    fused_output = fused(x)
+    
+    # Check
+    diff = torch.abs(ref_output - fused_output).max().item()
+    print(f"  Max difference: {diff:.6f}")
+    
+    if diff < 0.01:
+        print(f"  ✅ PASSED")
+    else:
+        print(f"  ❌ FAILED")
+        assert False
 
 
 def test_flash_attention():
@@ -168,6 +173,13 @@ def test_grouped_gemm():
     print("\n" + "=" * 70)
     print("TESTING GROUPED GEMM (MoE)")
     print("=" * 70)
+    # Skip if CUTLASS Python API is not available
+    try:
+        import deepwell.kernels.blackwell_production as bp
+        if not getattr(bp, "CUTLASS_AVAILABLE", False):
+            pytest.skip("CUTLASS Python API not available")
+    except Exception:
+        pytest.skip("CUTLASS Python API not available")
     
     num_experts = 8
     batch_size = 256
@@ -191,30 +203,27 @@ def test_grouped_gemm():
     for inp, weight in zip(inputs, weights):
         ref_outputs.append(torch.matmul(inp, weight.t()))
     
-    try:
-        from deepwell.kernels.blackwell_production import BlackwellGroupedGEMM, BlackwellConfig
-        
-        config = BlackwellConfig()
-        grouped_gemm = BlackwellGroupedGEMM(config)
-        
-        # Execute grouped
-        grouped_outputs = grouped_gemm.grouped_gemm(inputs, weights)
-        
-        # Check each expert
-        all_pass = True
-        for i, (ref, out) in enumerate(zip(ref_outputs, grouped_outputs)):
-            diff = torch.abs(ref - out).max().item()
-            print(f"  Expert {i}: max diff = {diff:.6f}")
-            if diff > 0.01:
-                all_pass = False
-        
-        if all_pass:
-            print(f"  ✅ ALL PASSED")
-        else:
-            print(f"  ❌ SOME FAILED")
-            
-    except ImportError:
-        print("  ⚠ Grouped GEMM not available yet")
+    from deepwell.kernels.blackwell_production import BlackwellGroupedGEMM, BlackwellConfig
+    
+    config = BlackwellConfig()
+    grouped_gemm = BlackwellGroupedGEMM(config)
+    
+    # Execute grouped
+    grouped_outputs = grouped_gemm.grouped_gemm(inputs, weights)
+    
+    # Check each expert
+    all_pass = True
+    for i, (ref, out) in enumerate(zip(ref_outputs, grouped_outputs)):
+        diff = torch.abs(ref - out).max().item()
+        print(f"  Expert {i}: max diff = {diff:.6f}")
+        if diff > 0.01:
+            all_pass = False
+    
+    if all_pass:
+        print(f"  ✅ ALL PASSED")
+    else:
+        print(f"  ❌ SOME FAILED")
+        assert False
 
 
 def main():
