@@ -1,95 +1,54 @@
 # Deepwell Examples
 
-This directory contains examples demonstrating how to use Deepwell for optimizing deep learning models on NVIDIA Blackwell GPUs.
+This directory contains examples demonstrating how to use the Deepwell library.
 
-## Examples
+## Available Examples
 
-### 1. `train_moe.py` - Mixture of Experts Training
-Complete example showing how to:
-- Build an MoE transformer model
-- Optimize it with Deepwell for Blackwell GPUs
-- Train with mixed precision (MXFP8)
-- Leverage grouped GEMM for expert routing
+### 1. simple_usage.py
+Basic examples showing:
+- How to use `BlackwellFlashAttention` directly
+- Using `DWSelfAttention` as a drop-in replacement for `nn.MultiheadAttention`
+- Building a transformer layer with Deepwell attention
 
+Run it:
 ```bash
-python examples/train_moe.py
+python examples/simple_usage.py
 ```
 
-**Key Features:**
-- 8 experts per layer
-- Top-2 routing
-- Automatic optimization for Blackwell
-- Performance benchmarking
-
-### 2. `test_kernels.py` - Direct Kernel Testing
-Test CUTLASS kernels and optimization directly:
-- GEMM kernel performance
-- Model optimization speedups
-- Mixed precision operations
-
-```bash
-python examples/test_kernels.py
-```
-
-**Tests Include:**
-- Direct CUTLASS vs PyTorch GEMM
-- MLP model optimization
-- MXFP8 quantization accuracy
-
-## Running Examples
-
-### Prerequisites
-1. Blackwell GPU (B100/B200)
-2. Deepwell installed:
-```bash
-pip install git+https://github.com/exla-ai/deepwell.git
-```
-
-### Expected Results
-
-On B200 GPU:
-- **MoE Training**: 2-4x speedup with Deepwell optimization
-- **GEMM Kernels**: 1,000-10,000 TFLOPS depending on size
-- **Model Optimization**: 2-5x speedup on transformer models
-
-## Creating Your Own Examples
-
-To optimize your model with Deepwell:
+## Quick Start
 
 ```python
-import deepwell as dw
-
-# Your PyTorch model
-model = create_your_model()
-
-# Optimize for Blackwell
-optimized = dw.optimize_for_blackwell(
-    model,
-    precision="mxfp8",  # or "fp4" for max speed
-    batch_size=32,
-    seq_len=512
+import torch
+from deepwell.kernels.blackwell_production import (
+    DWSelfAttention,
+    BlackwellConfig
 )
 
-# Use as normal
-output = optimized(input)
+# Create attention module
+config = BlackwellConfig()
+attention = DWSelfAttention(
+    hidden_dim=512,
+    num_heads=8,
+    config=config
+)
+
+# Use it like nn.MultiheadAttention
+x = torch.randn(4, 256, 512, device='cuda', dtype=torch.bfloat16)
+output = attention(x)
 ```
 
-## Performance Tips
+## Environment Setup
 
-1. **Use large enough matrices** - Blackwell excels at large GEMMs (>1024×1024)
-2. **Enable MXFP8/FP4** - Get 2-4x speedup with minimal accuracy loss
-3. **Batch operations** - Use grouped GEMM for parallel expert execution
-4. **Profile your code** - Use `torch.profiler` to identify bottlenecks
+Before running examples, ensure the CUTLASS bridge is enabled:
 
-## Troubleshooting
+```bash
+export DW_ENABLE_FMHA_BRIDGE=1
+export DW_FMHA_BRIDGE_PATH=/path/to/libdw_fmha_bridge_min.so
+```
 
-If you see warnings about CUTLASS not being available:
-1. Ensure CUDA kernels compiled during install
-2. Check GPU is detected: `python -c "import deepwell as dw; dw.probe()"`
-3. Rebuild extensions: `python setup.py build_ext --inplace`
+## Requirements
 
-## More Information
-
-- [Deepwell Documentation](../README.md)
-- [Blackwell Architecture Guide](https://developer.nvidia.com/blackwell)
-- [CUTLASS Documentation](https://github.com/NVIDIA/cutlass)
+- NVIDIA Blackwell GPU (SM100a)
+- CUDA 12.8+
+- PyTorch 2.0+
+- Built CUTLASS FMHA bridge (see main README)

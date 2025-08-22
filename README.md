@@ -27,10 +27,10 @@ Deepwell is a cutting-edge library that provides highly optimized CUDA kernels s
 | Shape (B,H,S,D) | Deepwell (ms) | PyTorch Eager | PyTorch Compile | Speedup (Eager) | Speedup (Compile) |
 |-----------------|---------------|---------------|-----------------|-----------------|-------------------|
 | (1,8,128,64)    | 0.166         | 0.095         | 0.029           | 0.57x           | 0.17x             |
-| (2,8,256,64)    | **0.028**     | 0.098         | 0.039           | **3.53x** ✅    | **1.41x** ✅      |
-| (4,16,256,128)  | **0.029**     | 0.158         | 0.077           | **5.52x** ✅    | **2.71x** ✅      |
-| (8,16,512,128)  | **0.056**     | 0.606         | 0.297           | **10.79x** 🔥   | **5.28x** 🔥      |
-| (1,32,1024,128) | **0.051**     | 0.540         | 0.266           | **10.51x** 🔥   | **5.18x** 🔥      |
+| (2,8,256,64)    | **0.028**     | 0.098         | 0.039           | **3.53x**       | **1.41x**         |
+| (4,16,256,128)  | **0.029**     | 0.158         | 0.077           | **5.52x**       | **2.71x**         |
+| (8,16,512,128)  | **0.056**     | 0.606         | 0.297           | **10.79x**      | **5.28x**         |
+| (1,32,1024,128) | **0.051**     | 0.540         | 0.266           | **10.51x**      | **5.18x**         |
 
 **Average: 6.18x faster than PyTorch eager, 2.95x faster than torch.compile**
 
@@ -38,9 +38,9 @@ Deepwell is a cutting-edge library that provides highly optimized CUDA kernels s
 
 | Config (H,h,L,B,S) | Deepwell (ms) | PyTorch Eager | PyTorch Compile | Speedup (Eager) | Speedup (Compile) |
 |--------------------|---------------|---------------|-----------------|-----------------|-------------------|
-| (256,4,4,4,128)    | 0.439         | 0.550         | 0.143           | **1.25x** ✅    | 0.32x             |
-| (512,8,4,4,256)    | 0.452         | 0.549         | 0.224           | **1.21x** ✅    | 0.49x             |
-| (1024,16,4,2,512)  | 0.496         | 0.589         | 0.424           | **1.19x** ✅    | 0.86x             |
+| (256,4,4,4,128)    | 0.439         | 0.550         | 0.143           | **1.25x**       | 0.32x             |
+| (512,8,4,4,256)    | 0.452         | 0.549         | 0.224           | **1.21x**       | 0.49x             |
+| (1024,16,4,2,512)  | 0.496         | 0.589         | 0.424           | **1.19x**       | 0.86x             |
 
 ## Installation
 
@@ -106,46 +106,51 @@ from deepwell.kernels.blackwell_production import BlackwellFlashAttention
 print(deepwell.__version__)
 ```
 
-## Quick Start
+## Getting Started
 
-### Using Deepwell Attention
+### Quick Example
 
 ```python
 import torch
-from deepwell.kernels.blackwell_production import (
-    BlackwellFlashAttention, 
-    BlackwellConfig,
-    DWSelfAttention
-)
+from deepwell.kernels.blackwell_production import DWSelfAttention, BlackwellConfig
 
-# Configure for your use case
+# Setup
 config = BlackwellConfig()
+attention = DWSelfAttention(hidden_dim=512, num_heads=8, config=config)
 
-# Create attention module
-attention = DWSelfAttention(
-    hidden_dim=512,
-    num_heads=8,
-    config=config
-)
-
-# Use as drop-in replacement
-batch_size, seq_len, hidden_dim = 4, 256, 512
-x = torch.randn(batch_size, seq_len, hidden_dim, 
-                device='cuda', dtype=torch.bfloat16)
-output = attention(x)
+# Use it
+x = torch.randn(4, 256, 512, device='cuda', dtype=torch.bfloat16)
+output = attention(x)  # Drop-in replacement for nn.MultiheadAttention
 ```
 
-### Environment Variables
+### Essential Setup
 
+1. **Set environment variables** (required):
 ```bash
-# Enable CUTLASS FMHA bridge (required for performance)
 export DW_ENABLE_FMHA_BRIDGE=1
+export DW_FMHA_BRIDGE_PATH=/path/to/deepwell/csrc/fmha_bridge_min/build/libdw_fmha_bridge_min.so
+```
 
-# Specify custom bridge path (optional)
-export DW_FMHA_BRIDGE_PATH=/path/to/libdw_fmha_bridge_min.so
+2. **Run the examples**:
+```bash
+# Simple usage examples
+python examples/simple_usage.py
 
-# Enable debug output
-export DW_FMHA_DEBUG=1
+# Performance benchmark
+python benchmarks/comprehensive_benchmark.py
+```
+
+### Project Structure
+
+```
+deepwell/
+├── src/deepwell/           # Main Python package
+│   └── kernels/           # High-performance kernels
+├── csrc/                  # C++/CUDA source
+│   └── fmha_bridge_min/   # CUTLASS FMHA bridge
+├── examples/              # Usage examples
+├── benchmarks/            # Performance benchmarks
+└── README.md              # This file
 ```
 
 ## Technical Deep Dive
@@ -533,4 +538,4 @@ For questions and support, please open an issue on GitHub or contact the maintai
 
 ---
 
-**Built with ❤️ for the AI community, optimized for NVIDIA Blackwell GPUs**
+**Built for the AI community, optimized for NVIDIA Blackwell GPUs**
