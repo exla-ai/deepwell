@@ -4,7 +4,7 @@ from typing import Optional, List, Tuple, Any, Dict
 from dataclasses import dataclass
 import warnings
 import torch
-import numpy as np
+from packaging import version
 
 # Try to import CUTLASS Python API for production kernels
 try:
@@ -12,13 +12,21 @@ try:
     from cutlass import *
     from cutlass.backend import *
     from cutlass.epilogue import *
+    import cutlass.backend as pycutlass
     CUTLASS_PYTHON_AVAILABLE = True
 except ImportError:
     CUTLASS_PYTHON_AVAILABLE = False
+
+# Minimum CUTLASS version that contains Blackwell kernels
+CUTLASS_MIN_VERSION = version.parse("3.5.0")
     
-# Try to import the C++ extension as fallback
+# Try to import the C++ extension as fallback.  If the import resolves to the
+# pure Python stub (which defines CUTLASS_PYTHON_FALLBACK), treat it as missing
+# so we don't mistakenly route execution through a slow path.
 try:
     from deepwell import cutlass_kernels as _cutlass_ext
+    if getattr(_cutlass_ext, "CUTLASS_PYTHON_FALLBACK", False):
+        raise ImportError("python fallback active")
     CUTLASS_CPP_AVAILABLE = True
 except ImportError:
     _cutlass_ext = None
@@ -34,15 +42,32 @@ if not CUTLASS_AVAILABLE:
     )
 
 
+def _check_cutlass_version() -> None:
+    """Warn if an older CUTLASS version is installed."""
+    if not CUTLASS_PYTHON_AVAILABLE:
+        return
+    try:
+        installed = version.parse(getattr(cutlass, "__version__", "0"))
+        if installed < CUTLASS_MIN_VERSION:
+            warnings.warn(
+                f"CUTLASS {installed} detected; upgrade to >= {CUTLASS_MIN_VERSION} "
+                "for optimal Blackwell kernels"
+            )
+    except Exception:
+        pass
+
+
 @dataclass
 class CutlassConfig:
     """Configuration for CUTLASS kernels."""
-    tile_m: int = 128
+    # Default threadblock tile for Blackwell tcgen05 MMA (see CUTLASS example 70)
+    tile_m: int = 256
     tile_n: int = 128
     tile_k: int = 64
     stages: int = 3
-    warp_count: Tuple[int, int, int] = (4, 2, 1)
-    instruction_shape: Tuple[int, int, int] = (16, 8, 16)  # MMA instruction shape
+    warp_count: Tuple[int, int, int] = (8, 4, 1)
+    instruction_shape: Tuple[int, int, int] = (16, 8, 64)  # tcgen05 MMA instruction shape
+    cluster_shape: Tuple[int, int, int] = (2, 2, 1)  # Launch clusters across SMs
     epilogue_functor: str = "LinearCombination"  # Epilogue operation
     swizzle: int = 1  # Thread block swizzling
     
@@ -65,8 +90,22 @@ class CutlassKernel:
         self.kernel_cache: Dict[str, Any] = {}
         self.is_initialized = False
         self.current_kernel = None
-        
-    def _get_kernel_key(self, 
+        self._pycutlass_initialized = False
+
+    def _ensure_pycutlass_setup(self):
+        """Initialize global CUTLASS state on first use."""
+        if not self._pycutlass_initialized:
+            # Allocate a generous memory pool so CUTLASS can stage inputs on GPU
+            pycutlass.get_memory_pool(init_pool_size=2 ** 30, max_pool_size=2 ** 32)
+            # Use NVCC for runtime compilation targeting Blackwell (SM100)
+            pycutlass.compiler.nvcc(
+                minimum_compute_capability=100,
+                maximum_compute_capability=100,
+            )
+            _check_cutlass_version()
+            self._pycutlass_initialized = True
+
+    def _get_kernel_key(self,
                        m: int, n: int, k: int,
                        dtype_a: str, dtype_b: str, dtype_c: str) -> str:
         """Generate cache key for kernel."""
@@ -141,58 +180,90 @@ class CutlassKernel:
     
     def _gemm_cutlass_python(self, a, b, c, alpha, beta, use_microscaling):
         """Use CUTLASS Python API for production Blackwell kernels."""
+        self._ensure_pycutlass_setup()
+
         m, k = a.shape
-        k2, n = b.shape
-        
-        # Get precision string
-        precision = getattr(self, 'precision', 'bf16')
-        
-        # Create CUTLASS operation for Blackwell
-        if precision == "mxfp8" and use_microscaling:
-            # Use tcgen05.mma with MXFP8 block scaling
-            element_a = cutlass.float8_e4m3
-            element_b = cutlass.float8_e4m3
-            element_accumulator = cutlass.float32
-            opcode_class = cutlass.OpcodeClass.TensorOp
-            
-        elif precision == "mxfp4" and use_microscaling:
-            # Use tcgen05.mma with MXFP4
-            element_a = cutlass.float4
-            element_b = cutlass.float4
-            element_accumulator = cutlass.float32
-            opcode_class = cutlass.OpcodeClass.TensorOp
-            
-        else:
-            # BF16 standard precision
-            element_a = cutlass.bfloat16
-            element_b = cutlass.bfloat16
-            element_accumulator = cutlass.float32
-            opcode_class = cutlass.OpcodeClass.TensorOp
-        
-        # Define the GEMM operation
-        operation = cutlass.op.Gemm(
-            arch=100,  # SM100 for Blackwell
-            tile_shape=[128, 128, 64],  # CTA tile
-            cluster_shape=[2, 1, 1],  # 2-CTA cluster
-            warp_count=[2, 2, 1],
-            instruction_shape=[16, 8, 16],  # tcgen05.mma shape
-            element_a=element_a,
-            element_b=element_b,
-            element_c=a.dtype,
-            element_accumulator=element_accumulator
+        _, n = b.shape
+
+        # Map PyTorch dtypes to CUTLASS numeric types
+        dtype_map = {
+            torch.float16: cutlass.float16,
+            torch.bfloat16: cutlass.bfloat16,
+            torch.float32: cutlass.float32,
+        }
+        element_a = dtype_map.get(a.dtype, cutlass.bfloat16)
+        element_b = dtype_map.get(b.dtype, cutlass.bfloat16)
+        element_c = dtype_map.get(c.dtype if c is not None else a.dtype, cutlass.bfloat16)
+        element_accumulator = cutlass.float32
+
+        # Determine memory layout
+        layout_a = cutlass.RowMajor if a.stride(1) == 1 else cutlass.ColumnMajor
+        layout_b = cutlass.RowMajor if b.stride(1) == 1 else cutlass.ColumnMajor
+        layout_c = cutlass.RowMajor if c is not None and c.stride(1) == 1 else cutlass.RowMajor
+
+        alignment = 8
+        A = TensorDescription(element_a, layout_a, alignment)
+        B = TensorDescription(element_b, layout_b, alignment)
+        C = TensorDescription(element_c, layout_c, alignment)
+
+        math_inst = MathInstruction(
+            list(self.config.instruction_shape),
+            A.element,
+            B.element,
+            element_accumulator,
+            OpcodeClass.TensorOp,
+            MathOperation.multiply_add,
         )
-        
-        # Compile the kernel
-        plan = cutlass.op.build(operation)
-        
-        # Allocate output if needed
+        tile_description = TileDescription(
+            [self.config.tile_m, self.config.tile_n, self.config.tile_k],
+            self.config.stages,
+            list(self.config.warp_count),
+            math_inst,
+            cluster_shape=list(self.config.cluster_shape),
+        )
+        epilogue_functor = pycutlass.LinearCombination(
+            C.element, C.alignment, element_accumulator, element_c
+        )
+
+        operation = GemmOperationUniversal(
+            arch=100, tile_description=tile_description, A=A, B=B, C=C,
+            epilogue_functor=epilogue_functor
+        )
+
+        # Cache compiled operations by problem configuration
+        kernel_key = self._get_kernel_key(m, n, k, str(a.dtype), str(b.dtype), str(c.dtype if c is not None else a.dtype))
+        if kernel_key not in self.kernel_cache:
+            pycutlass.compiler.add_module([operation])
+            pycutlass.compiler.compile()
+            self.kernel_cache[kernel_key] = operation
+        else:
+            operation = self.kernel_cache[kernel_key]
+
         if c is None:
             c = torch.zeros(m, n, dtype=a.dtype, device=a.device)
-        
-        # Run the kernel
-        plan.run(a, b, c, alpha, beta)
-        
-        return c
+
+        # Wrap tensors for CUTLASS without unnecessary host copies
+        tensor_a = pycutlass.Tensor(a)
+        tensor_b = pycutlass.Tensor(b)
+        tensor_c = pycutlass.Tensor(c)
+        result = torch.empty_like(c)
+        tensor_d = pycutlass.Tensor(result)
+
+        problem_size = cutlass.gemm.GemmCoord(m, n, k)
+        arguments = GemmArguments(
+            operation=operation,
+            problem_size=problem_size,
+            A=tensor_a,
+            B=tensor_b,
+            C=tensor_c,
+            D=tensor_d,
+            output_op=operation.epilogue_type(alpha, beta),
+        )
+
+        operation.run(arguments)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        return result
     
     def _gemm_cutlass_cpp(self, a, b, c, alpha, beta):
         """Use C++ extension fallback."""
