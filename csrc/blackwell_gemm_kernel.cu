@@ -51,10 +51,11 @@ void launch_production_gemm(
     // Optimized for Blackwell: use appropriate compute type and algorithm
     cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-    
-    // For Blackwell, prefer specific algorithms
-    #ifdef BLACKWELL_ARCH
-    // Use Blackwell-optimized algorithm if available
+
+    // For Blackwell, prefer specific algorithms when supported
+    #if defined(BLACKWELL_ARCH) && defined(CUBLAS_GEMM_ALGO_TENSOR_OP_SM100)
+    // Some cuBLAS releases do not yet ship Blackwell-specific algorithms.
+    // Only use the enum when it exists; otherwise the default above is used.
     algo = CUBLAS_GEMM_ALGO_TENSOR_OP_SM100;  // Blackwell tensor core algorithm
     #endif
     
