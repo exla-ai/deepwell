@@ -1,31 +1,117 @@
 """
-Setup script for building CUTLASS C++ extensions.
+Deepwell: Automatic PyTorch optimization for NVIDIA Blackwell GPUs
+Builds all necessary components during installation
 """
 
 import os
 import sys
+import subprocess
+import shutil
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
-from torch.utils import cpp_extension
+from setuptools.command.build_ext import build_ext as _build_ext
+from setuptools.command.install import install
+from setuptools.command.develop import develop
 import torch
+from torch.utils import cpp_extension
 
-# Get paths
-ROOT_DIR = Path(__file__).parent
-CSRC_DIR = ROOT_DIR / "csrc"
-CUTLASS_DIR = Path(os.environ.get("CUTLASS_PATH", "/usr/local/cutlass"))
-LOCAL_CUTLASS = ROOT_DIR / "third_party" / "cutlass"
 
-# Check for CUDA
-if not torch.cuda.is_available():
-    print("Warning: CUDA not available. Building CPU-only version.")
-    USE_CUDA = False
-else:
-    USE_CUDA = True
+class BuildFMHABridge:
+    """Build the CUTLASS FMHA bridge library"""
     
-# Get CUDA architecture flags
-if USE_CUDA:
-    # Detect GPU architecture
-    import subprocess
+    @staticmethod
+    def build():
+        root_dir = Path(__file__).parent
+        bridge_dir = root_dir / "csrc" / "fmha_bridge_min"
+        build_dir = bridge_dir / "build"
+        
+        print("\n" + "="*60)
+        print("Building CUTLASS FMHA Bridge for Blackwell")
+        print("="*60)
+        
+        # Create build directory
+        build_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Run CMake
+        print("Configuring with CMake...")
+        cmake_cmd = [
+            "cmake",
+            "-S", str(bridge_dir),
+            "-B", str(build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CUDA_ARCHITECTURES=100a"
+        ]
+        
+        result = subprocess.run(cmake_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"CMake configuration failed: {result.stderr}")
+            print("Warning: FMHA bridge build failed, continuing without it")
+            return None
+            
+        # Build
+        print("Building FMHA bridge...")
+        build_cmd = ["cmake", "--build", str(build_dir), "-j", str(os.cpu_count())]
+        result = subprocess.run(build_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"Build failed: {result.stderr}")
+            print("Warning: FMHA bridge build failed, continuing without it")
+            return None
+            
+        # Find the built library
+        bridge_lib = build_dir / "libdw_fmha_bridge_min.so"
+        if not bridge_lib.exists():
+            print("Warning: FMHA bridge library not found after build")
+            return None
+            
+        print(f"Successfully built FMHA bridge: {bridge_lib}")
+        
+        # Copy to package directory for distribution
+        target_dir = root_dir / "src" / "deepwell" / "lib"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_lib = target_dir / "libdw_fmha_bridge_min.so"
+        shutil.copy2(bridge_lib, target_lib)
+        print(f"Installed bridge to: {target_lib}")
+        
+        return str(target_lib)
+
+
+class CustomBuildExt(cpp_extension.BuildExtension):
+    """Custom build extension to also build FMHA bridge"""
+    
+    def run(self):
+        # Build FMHA bridge first
+        bridge_path = BuildFMHABridge.build()
+        
+        # Store bridge path for runtime
+        if bridge_path:
+            config_file = Path(self.build_lib) / "deepwell" / "_bridge_config.py"
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            config_file.write_text(f'BRIDGE_PATH = "{bridge_path}"\n')
+        
+        # Continue with normal extension build
+        super().run()
+
+
+class CustomInstall(install):
+    """Custom install to ensure everything is built"""
+    
+    def run(self):
+        self.run_command('build_ext')
+        super().run()
+
+
+class CustomDevelop(develop):
+    """Custom develop to ensure everything is built"""
+    
+    def run(self):
+        self.run_command('build_ext')
+        super().run()
+
+
+# Detect Blackwell GPU
+def detect_gpu():
+    """Detect GPU architecture"""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
@@ -33,85 +119,63 @@ if USE_CUDA:
         )
         if result.returncode == 0:
             compute_cap = result.stdout.strip().replace(".", "")
-            # Convert to CUDA arch flags (as a list)
-            if int(compute_cap) >= 100:
-                # For Blackwell tcgen05.mma, target only SM100a to allow tcgen05 instructions
-                cuda_arch_flags = ["-arch=sm_100a", "-gencode=arch=compute_100,code=sm_100a"]
-                print(f"Detected Blackwell GPU (SM{compute_cap}) -> using sm_100a only")
-            else:
-                cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
-                
-                # Add PTX for forward compatibility
-                if int(compute_cap) >= 90:  # Hopper
-                    cuda_arch_flags.append(f"-gencode=arch=compute_90,code=sm_90a")
-                    print(f"Detected Hopper GPU (SM{compute_cap})")
-        else:
-            # Default to common architectures
-            cuda_arch_flags = ["-gencode=arch=compute_80,code=sm_80"]
-            print("Using default CUDA architecture (SM80)")
+            return int(compute_cap)
     except:
-        cuda_arch_flags = ["-gencode=arch=compute_80,code=sm_80"]
-else:
-    cuda_arch_flags = []
+        pass
+    return 80  # Default to Ampere
 
-# Extension sources
-sources = [
-    str(CSRC_DIR / "cutlass_kernels.cpp"),
-    str(CSRC_DIR / "python_bindings.cpp"),
+
+# Get paths
+ROOT_DIR = Path(__file__).parent
+CSRC_DIR = ROOT_DIR / "csrc"
+LOCAL_CUTLASS = ROOT_DIR / "third_party" / "cutlass"
+
+# Check for CUDA
+if not torch.cuda.is_available():
+    print("Error: CUDA is required for Deepwell. Please install CUDA 12.8+")
+    sys.exit(1)
+
+# Detect GPU and set architecture
+compute_cap = detect_gpu()
+if compute_cap >= 100:
+    # Blackwell - use sm_100a for tcgen05 support
+    cuda_arch_flags = ["-arch=sm_100a"]
+    print(f"Detected Blackwell GPU (SM{compute_cap})")
+else:
+    print(f"Warning: Non-Blackwell GPU detected (SM{compute_cap})")
+    print("Deepwell is optimized for Blackwell GPUs (RTX 50 series, H200, GB200)")
+    cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
+
+# Extension sources - use relative paths
+cpp_sources = [
+    "csrc/cutlass_kernels.cpp",
+    "csrc/python_bindings.cpp",
 ]
 
-# Add CUDA kernel sources if CUDA is available
-if USE_CUDA:
-    cuda_sources = [
-        # Temporarily exclude problematic GEMM kernel; rely on FMHA + PyTorch/CUTLASS Python
-        # "blackwell_gemm_kernel.cu",
-        "mxfp8_quantization.cu"
-    ]
-    for cuda_file in cuda_sources:
-        cuda_path = CSRC_DIR / cuda_file
-        if cuda_path.exists():
-            sources.append(str(cuda_path))
+cuda_sources = []
+cuda_files = ["mxfp8_quantization.cu"]
+for cuda_file in cuda_files:
+    cuda_path = CSRC_DIR / cuda_file
+    if cuda_path.exists():
+        cuda_sources.append(f"csrc/{cuda_file}")
+
+# Combine sources
+sources = cpp_sources + cuda_sources
 
 # Include directories
 include_dirs = [
     str(CSRC_DIR),
+    str(LOCAL_CUTLASS / "include"),
+    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
+    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
+    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
+    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
 ]
-
-# Add CUTLASS includes if it exists
-if CUTLASS_DIR.exists():
-    include_dirs.extend([
-        str(CUTLASS_DIR / "include"),
-        str(CUTLASS_DIR / "tools/util/include"),
-    ])
-else:
-    # Try system CUTLASS
-    system_cutlass = Path("/usr/local/cutlass")
-    if system_cutlass.exists():
-        include_dirs.extend([
-            str(system_cutlass / "include"),
-            str(system_cutlass / "tools/util/include"),
-        ])
-    # Try local third_party CUTLASS clone
-    if LOCAL_CUTLASS.exists():
-        include_dirs.extend([
-            str(LOCAL_CUTLASS / "include"),
-            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
-            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
-            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
-            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
-        ])
-    # If no CUTLASS found, that's OK - we can still build without it
-
-# Add PyTorch include directories
 include_dirs.extend(cpp_extension.include_paths())
 
-# Libraries to link
-libraries = []
-library_dirs = []
-
-if USE_CUDA:
-    libraries.extend(["cudart", "cublas", "cublasLt"])
-    library_dirs.append(cpp_extension.library_paths()[0])
+# Libraries
+libraries = ["cudart", "cublas", "cublasLt"]
+library_dirs = [cpp_extension.library_paths()[0]]
 
 # Compiler flags
 extra_compile_args = {
@@ -128,22 +192,22 @@ extra_compile_args = {
         "--expt-extended-lambda",
         "--use_fast_math",
         "-rdc=true",
-        *cuda_arch_flags,  # Unpack the list of arch flags
+        *cuda_arch_flags,
         "-DUSE_CUTLASS",
         "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
-        "-DCUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES=1",
         "-DCUTLASS_ENABLE_SM100_TCGEN05=1",
         "-DCUTE_ARCH_TMA_SM100_ENABLED=1",
-        "-DCUTE_ARCH_TMA_SM90_ENABLED=1",
+        "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED=1",
         "-DCUTLASS_ENABLE_SYNCLOG=0",
     ],
 }
 
-# Define extension
-if USE_CUDA:
+# Define extensions
+if cuda_sources:
+    # If we have CUDA sources, use CUDAExtension
     ext_modules = [
         cpp_extension.CUDAExtension(
-            name="deepwell.cutlass_kernels",  # Full module path
+            name="deepwell.cutlass_kernels",
             sources=sources,
             include_dirs=include_dirs,
             libraries=libraries,
@@ -152,41 +216,41 @@ if USE_CUDA:
             extra_link_args=["-Wl,-rpath,$ORIGIN"],
         )
     ]
-    # Build a separate FMHA module if wrapper is present and explicitly enabled
-    if os.environ.get("DW_BUILD_FMHA", "0") == "1" and (CSRC_DIR / "fmha_blackwell.cu").exists():
-        ext_modules.append(
-            cpp_extension.CUDAExtension(
-                name="deepwell_fmha",
-                sources=[str(CSRC_DIR / "fmha_blackwell.cu")],
-                include_dirs=include_dirs,
-                libraries=libraries + ["cudadevrt"],
-                library_dirs=library_dirs,
-                extra_compile_args=extra_compile_args,
-                extra_link_args=["-Wl,-rpath,$ORIGIN"],
-            )
-        )
 else:
+    # Otherwise use CppExtension
     ext_modules = [
         cpp_extension.CppExtension(
             name="deepwell.cutlass_kernels",
-            sources=sources,
+            sources=cpp_sources,
             include_dirs=include_dirs,
             extra_compile_args=extra_compile_args["cxx"],
+            extra_link_args=["-Wl,-rpath,$ORIGIN"],
         )
     ]
+
+# Read README for long description
+with open("README.md", "r") as f:
+    long_description = f.read()
 
 # Setup configuration
 setup(
     name="deepwell",
-    version="0.0.1",
+    version="0.1.0",
     author="Deepwell Team",
-    description="CUTLASS kernels for Blackwell optimization",
-    long_description=open("README.md").read() if Path("README.md").exists() else "",
+    description="Automatic PyTorch optimization for NVIDIA Blackwell GPUs",
+    long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
+    package_data={
+        "deepwell": ["lib/*.so"],  # Include built libraries
+    },
     ext_modules=ext_modules,
-    cmdclass={"build_ext": cpp_extension.BuildExtension},
+    cmdclass={
+        "build_ext": CustomBuildExt,
+        "install": CustomInstall,
+        "develop": CustomDevelop,
+    },
     python_requires=">=3.8",
     install_requires=[
         "torch>=2.0.0",
@@ -198,20 +262,26 @@ setup(
             "black>=22.0",
             "isort>=5.0",
         ],
-        "cutlass": [
-            "nvidia-cutlass>=3.5.0",
-        ],
     },
     zip_safe=False,
+    classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    ],
 )
 
-# Print build info
 print("\n" + "="*60)
-print("Building Deepwell CUTLASS Extensions")
+print("Deepwell Installation Complete!")
 print("="*60)
-print(f"CUDA Available: {USE_CUDA}")
-if USE_CUDA:
-    print(f"CUDA Architecture: {cuda_arch_flags}")
-print(f"CUTLASS Path: {CUTLASS_DIR}")
-print(f"Sources: {sources}")
-print("="*60 + "\n")
+print("Automatic optimization is now available:")
+print("  import deepwell")
+print("  model = deepwell.optimize(your_model)")
+print("="*60)

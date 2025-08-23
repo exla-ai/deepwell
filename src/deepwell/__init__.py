@@ -4,7 +4,10 @@ Deepwell - Automatic optimization for PyTorch models on NVIDIA Blackwell GPUs.
 Train efficiently on Blackwell via low-precision kernels, planning, and MoE support.
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
+
+# Main API - automatic optimization
+from .optimizer import optimize, DeepwellOptimizer
 
 # Core imports
 from .probe import probe, HardwareConfig, GPUInfo

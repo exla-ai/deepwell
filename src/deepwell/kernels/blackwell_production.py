@@ -421,30 +421,67 @@ class DWSelfAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+        self.batch_first = True  # Always use batch-first for compatibility
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False, dtype=torch.bfloat16)
         self.flash = BlackwellFlashAttention(config)
+        
+        # Compatibility attributes for nn.MultiheadAttention
+        self.in_proj_weight = None  # We use separate q/k/v projections
+        self.in_proj_bias = None
+        self.bias_k = None
+        self.bias_v = None
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        query: torch.Tensor,
+        key: Optional[torch.Tensor] = None,
+        value: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        need_weights: bool = False,
+        attn_mask: Optional[torch.Tensor] = None,
+        average_attn_weights: bool = True,
+        is_causal: bool = False
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # Handle self-attention case (key and value are None)
+        if key is None:
+            key = query
+        if value is None:
+            value = query
+            
+        # Ensure batch-first format
+        x = query
+        
         # x: [batch, seq, embed]
         batch, seq, _ = x.shape
         # Ensure bf16 activations to match FMHA expectations
         x = x.to(torch.bfloat16)
+        key = key.to(torch.bfloat16)
+        value = value.to(torch.bfloat16)
+        
         q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
+        k = self.k_proj(key)
+        v = self.v_proj(value)
         # [B,S,E] -> [B,H,S,D]
         def split_heads(t):
             return t.view(batch, seq, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         q = split_heads(q)
         k = split_heads(k)
         v = split_heads(v)
-        o = self.flash.forward(q, k, v, causal=True)
+        
+        # Handle causal masking
+        causal = is_causal or (attn_mask is not None)
+        o = self.flash.forward(q, k, v, causal=causal)
+        
         # [B,H,S,D] -> [B,S,E]
         o = o.permute(0, 2, 1, 3).contiguous().view(batch, seq, self.embed_dim)
-        return self.out_proj(o)
+        output = self.out_proj(o)
+        
+        # Return tuple (output, attention_weights) for compatibility
+        # We don't compute attention weights in flash attention
+        return output, None
 
 
 class FusedLinearGELU(nn.Module):
