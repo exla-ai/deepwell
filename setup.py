@@ -15,8 +15,27 @@ from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
 from setuptools.command.install import install
 from setuptools.command.develop import develop
-import torch
-from torch.utils import cpp_extension
+
+# Check if we should skip building C++ extensions
+SKIP_BUILD_EXTENSIONS = os.environ.get('DEEPWELL_NO_BUILD_EXTENSIONS', '0') == '1'
+
+# Conditional torch import
+try:
+    if not SKIP_BUILD_EXTENSIONS:
+        import torch
+        from torch.utils import cpp_extension
+        TORCH_AVAILABLE = True
+    else:
+        print("Skipping C++ extension build (DEEPWELL_NO_BUILD_EXTENSIONS=1)")
+        torch = None
+        cpp_extension = None
+        TORCH_AVAILABLE = False
+except ImportError:
+    print("Warning: PyTorch not found during build, C++ extensions will be skipped")
+    print("The library will still be installed but with limited functionality.")
+    torch = None
+    cpp_extension = None
+    TORCH_AVAILABLE = False
 
 
 def download_cutlass():
@@ -118,24 +137,32 @@ class BuildFMHABridge:
         return str(target_lib)
 
 
-class CustomBuildExt(cpp_extension.BuildExtension):
-    """Custom build extension to also build FMHA bridge"""
-    
-    def run(self):
-        # Download CUTLASS if needed
-        cutlass_dir = download_cutlass()
+if TORCH_AVAILABLE and cpp_extension:
+    class CustomBuildExt(cpp_extension.BuildExtension):
+        """Custom build extension to also build FMHA bridge"""
         
-        # Build FMHA bridge first
-        bridge_path = BuildFMHABridge.build()
-        
-        # Store bridge path for runtime
-        if bridge_path:
-            config_file = Path(self.build_lib) / "deepwell" / "_bridge_config.py"
-            config_file.parent.mkdir(parents=True, exist_ok=True)
-            config_file.write_text(f'BRIDGE_PATH = "{bridge_path}"\n')
-        
-        # Continue with normal extension build
-        super().run()
+        def run(self):
+            # Download CUTLASS if needed
+            cutlass_dir = download_cutlass()
+            
+            # Build FMHA bridge first
+            bridge_path = BuildFMHABridge.build()
+            
+            # Store bridge path for runtime
+            if bridge_path:
+                config_file = Path(self.build_lib) / "deepwell" / "_bridge_config.py"
+                config_file.parent.mkdir(parents=True, exist_ok=True)
+                config_file.write_text(f'BRIDGE_PATH = "{bridge_path}"\n')
+            
+            # Continue with normal extension build
+            super().run()
+else:
+    from setuptools.command.build_ext import build_ext
+    class CustomBuildExt(build_ext):
+        """Dummy build extension when torch not available"""
+        def run(self):
+            print("Skipping C++ extension build (PyTorch not available)")
+            super().run()
 
 
 class CustomInstall(install):
@@ -157,6 +184,10 @@ class CustomDevelop(develop):
 # Detect Blackwell GPU
 def detect_gpu():
     """Detect GPU architecture"""
+    # If building without extensions, return default
+    if not TORCH_AVAILABLE:
+        return 80
+    
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
@@ -198,95 +229,109 @@ else:
     print("Deepwell is optimized for Blackwell GPUs (RTX 50 series, H200, GB200)")
     cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
 
-# Extension sources - use relative paths
-cpp_sources = [
-    "csrc/cutlass_kernels.cpp",
-    "csrc/python_bindings.cpp",
-]
+# Build extensions only if torch is available and not skipping
+if TORCH_AVAILABLE and not SKIP_BUILD_EXTENSIONS:
+    # Extension sources - use relative paths
+    cpp_sources = [
+        "csrc/cutlass_kernels.cpp",
+        "csrc/python_bindings.cpp",
+    ]
 
-cuda_sources = []
-cuda_files = ["mxfp8_quantization.cu"]
-for cuda_file in cuda_files:
-    cuda_path = CSRC_DIR / cuda_file
-    if cuda_path.exists():
-        cuda_sources.append(f"csrc/{cuda_file}")
+    cuda_sources = []
+    cuda_files = ["mxfp8_quantization.cu"]
+    for cuda_file in cuda_files:
+        cuda_path = CSRC_DIR / cuda_file
+        if cuda_path.exists():
+            cuda_sources.append(f"csrc/{cuda_file}")
 
-# Combine sources
-sources = cpp_sources + cuda_sources
+    # Combine sources
+    sources = cpp_sources + cuda_sources
 
-# Include directories
-include_dirs = [
-    str(CSRC_DIR),
-]
+    # Include directories
+    include_dirs = [
+        str(CSRC_DIR),
+    ]
 
-# Add CUTLASS include paths if available
-if LOCAL_CUTLASS.exists():
-    include_dirs.extend([
-        str(LOCAL_CUTLASS / "include"),
-        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
-        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
-        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
-        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
-    ])
+    # Add CUTLASS include paths if available
+    if LOCAL_CUTLASS.exists():
+        include_dirs.extend([
+            str(LOCAL_CUTLASS / "include"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
+            str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
+        ])
+    else:
+        print("Warning: CUTLASS include directories not found. Some features may be limited.")
+
+    include_dirs.extend(cpp_extension.include_paths())
+    library_dirs = [cpp_extension.library_paths()[0]]
+
+    # Libraries
+    libraries = ["cudart", "cublas", "cublasLt"]
+
+    # Compiler flags
+    extra_compile_args = {
+        "cxx": [
+            "-O3",
+            "-std=c++17",
+            "-fPIC",
+            "-DUSE_CUTLASS",
+        ],
+        "nvcc": [
+            "-O3",
+            "-std=c++17",
+            "--expt-relaxed-constexpr",
+            "--expt-extended-lambda",
+            "--use_fast_math",
+            "-rdc=true",
+            *cuda_arch_flags,
+            "-DUSE_CUTLASS",
+            "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
+            "-DCUTLASS_ENABLE_SM100_TCGEN05=1",
+            "-DCUTE_ARCH_TMA_SM100_ENABLED=1",
+            "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED=1",
+            "-DCUTLASS_ENABLE_SYNCLOG=0",
+        ],
+    }
 else:
-    print("Warning: CUTLASS include directories not found. Some features may be limited.")
-
-include_dirs.extend(cpp_extension.include_paths())
-
-# Libraries
-libraries = ["cudart", "cublas", "cublasLt"]
-library_dirs = [cpp_extension.library_paths()[0]]
-
-# Compiler flags
-extra_compile_args = {
-    "cxx": [
-        "-O3",
-        "-std=c++17",
-        "-fPIC",
-        "-DUSE_CUTLASS",
-    ],
-    "nvcc": [
-        "-O3",
-        "-std=c++17",
-        "--expt-relaxed-constexpr",
-        "--expt-extended-lambda",
-        "--use_fast_math",
-        "-rdc=true",
-        *cuda_arch_flags,
-        "-DUSE_CUTLASS",
-        "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1",
-        "-DCUTLASS_ENABLE_SM100_TCGEN05=1",
-        "-DCUTE_ARCH_TMA_SM100_ENABLED=1",
-        "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED=1",
-        "-DCUTLASS_ENABLE_SYNCLOG=0",
-    ],
-}
+    # Empty definitions when not building extensions
+    sources = []
+    include_dirs = []
+    libraries = []
+    library_dirs = []
+    extra_compile_args = {}
 
 # Define extensions
-if cuda_sources:
-    # If we have CUDA sources, use CUDAExtension
-    ext_modules = [
-        cpp_extension.CUDAExtension(
-            name="deepwell.cutlass_kernels",
-            sources=sources,
-            include_dirs=include_dirs,
-            libraries=libraries,
-            library_dirs=library_dirs,
-            extra_compile_args=extra_compile_args,
-            extra_link_args=["-Wl,-rpath,$ORIGIN"],
-        )
-    ]
+if TORCH_AVAILABLE and not SKIP_BUILD_EXTENSIONS:
+    if cuda_sources:
+        # If we have CUDA sources, use CUDAExtension
+        ext_modules = [
+            cpp_extension.CUDAExtension(
+                name="deepwell.cutlass_kernels",
+                sources=sources,
+                include_dirs=include_dirs,
+                libraries=libraries,
+                library_dirs=library_dirs,
+                extra_compile_args=extra_compile_args,
+                extra_link_args=["-Wl,-rpath,$ORIGIN"],
+            )
+        ]
+    else:
+        # Otherwise use CppExtension
+        ext_modules = [
+            cpp_extension.CppExtension(
+                name="deepwell.cutlass_kernels",
+                sources=cpp_sources,
+                include_dirs=include_dirs,
+                extra_compile_args=extra_compile_args["cxx"],
+                extra_link_args=["-Wl,-rpath,$ORIGIN"],
+            )
+        ]
 else:
-    # Otherwise use CppExtension
-    ext_modules = [
-        cpp_extension.CppExtension(
-            name="deepwell.cutlass_kernels",
-            sources=cpp_sources,
-            include_dirs=include_dirs,
-            extra_compile_args=extra_compile_args["cxx"],
-            extra_link_args=["-Wl,-rpath,$ORIGIN"],
-        )
-    ]
+    # No extensions if torch not available or skipping build
+    ext_modules = []
+    print("Not building C++ extensions")
 
 # Read README for long description
 with open("README.md", "r") as f:
@@ -310,7 +355,7 @@ setup(
         "build_ext": CustomBuildExt,
         "install": CustomInstall,
         "develop": CustomDevelop,
-    },
+    } if ext_modules else {},
     python_requires=">=3.8",
     install_requires=[
         "torch>=2.0.0",

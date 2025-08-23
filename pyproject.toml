@@ -48,9 +48,8 @@ dev = [
 requires = [
   "setuptools>=61.0",
   "wheel",
-  "torch>=2.0.0",
   "ninja",
-  "nvidia-cutlass>=3.5.0",
+  # Note: torch and nvidia-cutlass are runtime dependencies, not build dependencies
 ]
 build-backend = "setuptools.build_meta"
 
