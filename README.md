@@ -1,6 +1,6 @@
 # Deepwell: Automatic PyTorch Optimization for NVIDIA Blackwell GPUs
 
-Deepwell automatically optimizes PyTorch models for NVIDIA Blackwell GPUs, achieving 1.5-2x training speedups with zero code changes. Inspired by Cursor's MXFP8 optimizations, Deepwell leverages CUTLASS kernels and Blackwell's Tensor Memory (TMEM) architecture.
+Deepwell automatically optimizes PyTorch models for NVIDIA Blackwell GPUs, achieving training speedups with zero code changes. Deepwell leverages CUTLASS kernels and Blackwell's Tensor Memory (TMEM) architecture.
 
 ## Table of Contents
 - [Key Features](#key-features)
