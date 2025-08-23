@@ -13,13 +13,6 @@ dependencies = [
   "numpy>=1.21.0",
   "nvidia-cutlass>=3.5.0",  # Required for Blackwell-optimized kernels
 ]
-
-[project.urls]
-"Homepage" = "https://github.com/exla-ai/deepwell"
-"Bug Reports" = "https://github.com/exla-ai/deepwell/issues"
-"Source" = "https://github.com/exla-ai/deepwell"
-
-[project.classifiers]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -36,6 +29,11 @@ classifiers = [
   "Operating System :: POSIX :: Linux",
   "Environment :: GPU :: NVIDIA CUDA :: 12",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/exla-ai/deepwell"
+"Bug Reports" = "https://github.com/exla-ai/deepwell/issues"
+"Source" = "https://github.com/exla-ai/deepwell"
 
 [project.optional-dependencies]
 dev = [

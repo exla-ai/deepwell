@@ -213,21 +213,25 @@ if not LOCAL_CUTLASS.exists():
     # because nvidia-cutlass will be installed as a dependency
     LOCAL_CUTLASS = download_cutlass() or LOCAL_CUTLASS
 
-# Check for CUDA
-if not torch.cuda.is_available():
-    print("Error: CUDA is required for Deepwell. Please install CUDA 12.8+")
-    sys.exit(1)
-
-# Detect GPU and set architecture
-compute_cap = detect_gpu()
-if compute_cap >= 100:
-    # Blackwell - use sm_100a for tcgen05 support
-    cuda_arch_flags = ["-arch=sm_100a"]
-    print(f"Detected Blackwell GPU (SM{compute_cap})")
+# Check for CUDA and detect GPU architecture
+if TORCH_AVAILABLE and not SKIP_BUILD_EXTENSIONS:
+    if not torch.cuda.is_available():
+        print("Warning: CUDA is not available. C++ extensions will not be built.")
+        print("For full functionality, please install CUDA 12.8+")
+        cuda_arch_flags = []
+    else:
+        # Detect GPU and set architecture
+        compute_cap = detect_gpu()
+        if compute_cap >= 100:
+            # Blackwell - use sm_100a for tcgen05 support
+            cuda_arch_flags = ["-arch=sm_100a"]
+            print(f"Detected Blackwell GPU (SM{compute_cap})")
+        else:
+            print(f"Warning: Non-Blackwell GPU detected (SM{compute_cap})")
+            print("Deepwell is optimized for Blackwell GPUs (RTX 50 series, H200, GB200)")
+            cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
 else:
-    print(f"Warning: Non-Blackwell GPU detected (SM{compute_cap})")
-    print("Deepwell is optimized for Blackwell GPUs (RTX 50 series, H200, GB200)")
-    cuda_arch_flags = [f"-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"]
+    cuda_arch_flags = []
 
 # Build extensions only if torch is available and not skipping
 if TORCH_AVAILABLE and not SKIP_BUILD_EXTENSIONS:
