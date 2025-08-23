@@ -42,7 +42,7 @@
 
 ### Installation
 ```bash
-git clone https://github.com/yourusername/deepwell.git
+git clone https://github.com/exla-ai/deepwell.git
 cd deepwell
 git submodule update --init --recursive
 pip install .

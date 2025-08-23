@@ -53,18 +53,33 @@ Deepwell automatically optimizes PyTorch models for NVIDIA Blackwell GPUs, achie
 
 ### Quick Install
 
+Install directly from GitHub:
+
 ```bash
-# Clone and install (builds everything automatically)
-git clone https://github.com/yourusername/deepwell.git
-cd deepwell
-git submodule update --init --recursive
-pip install .
+# Install the latest version
+pip install git+https://github.com/exla-ai/deepwell.git
+
+# Or install a specific version/tag
+pip install git+https://github.com/exla-ai/deepwell.git@v0.1.0
+
+# Or install a specific branch
+pip install git+https://github.com/exla-ai/deepwell.git@main
 ```
 
-That's it! The installation automatically:
+For development or editable installation:
+
+```bash
+# Clone and install in editable mode
+git clone https://github.com/exla-ai/deepwell.git
+cd deepwell
+pip install -e .
+```
+
+The installation automatically:
+- Installs all required dependencies including NVIDIA CUTLASS
 - Detects your GPU architecture
-- Builds optimized CUTLASS kernels
-- Compiles the FMHA bridge for Blackwell
+- Builds optimized kernels for Blackwell GPUs
+- Compiles the FMHA bridge extensions
 - Sets up all necessary paths
 
 ### Verify Installation
@@ -72,7 +87,25 @@ That's it! The installation automatically:
 ```python
 import deepwell
 print(deepwell.__version__)  # Should print 0.1.0
+
+# Check if CUTLASS kernels are available
+from deepwell.kernels.cutlass_bindings import CUTLASS_AVAILABLE
+print(f"CUTLASS available: {CUTLASS_AVAILABLE}")
 ```
+
+Or run the comprehensive test script:
+
+```bash
+# After installation, run the test script
+python test_installation.py
+```
+
+This will check:
+- Package import and version
+- CUDA and GPU compatibility
+- CUTLASS kernel availability
+- Model optimization functionality
+- Kernel registry initialization
 
 ## Getting Started
 
@@ -530,7 +563,7 @@ If you use Deepwell in your research, please cite:
 @software{deepwell2024,
   title = {Deepwell: High-Performance CUDA Kernels for NVIDIA Blackwell GPUs},
   year = {2024},
-  url = {https://github.com/yourusername/deepwell}
+  url = {https://github.com/exla-ai/deepwell}
 }
 ```
 

@@ -1,6 +1,6 @@
 [project]
 name = "deepwell"
-version = "0.0.1"
+version = "0.1.0"
 description = "Train efficiently on Blackwell via low-precision kernels, planning, and MoE support."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -11,6 +11,30 @@ authors = [
 dependencies = [
   "torch>=2.0.0",
   "numpy>=1.21.0",
+  "nvidia-cutlass>=3.5.0",  # Required for Blackwell-optimized kernels
+]
+
+[project.urls]
+"Homepage" = "https://github.com/exla-ai/deepwell"
+"Bug Reports" = "https://github.com/exla-ai/deepwell/issues"
+"Source" = "https://github.com/exla-ai/deepwell"
+
+[project.classifiers]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: GPU :: NVIDIA CUDA :: 12",
 ]
 
 [project.optional-dependencies]
@@ -19,9 +43,6 @@ dev = [
   "black>=22.0",
   "isort>=5.0",
 ]
-cutlass = [
-  "nvidia-cutlass>=3.5.0",
-]
 
 [build-system]
 requires = [
@@ -29,6 +50,7 @@ requires = [
   "wheel",
   "torch>=2.0.0",
   "ninja",
+  "nvidia-cutlass>=3.5.0",
 ]
 build-backend = "setuptools.build_meta"
 

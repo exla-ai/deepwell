@@ -7,6 +7,9 @@ import os
 import sys
 import subprocess
 import shutil
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
@@ -14,6 +17,45 @@ from setuptools.command.install import install
 from setuptools.command.develop import develop
 import torch
 from torch.utils import cpp_extension
+
+
+def download_cutlass():
+    """Download CUTLASS if not present"""
+    root_dir = Path(__file__).parent
+    cutlass_dir = root_dir / "third_party" / "cutlass"
+    
+    if cutlass_dir.exists():
+        print(f"CUTLASS already exists at {cutlass_dir}")
+        return cutlass_dir
+    
+    print("Downloading CUTLASS from GitHub...")
+    cutlass_dir.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Download CUTLASS v3.5.1 (latest stable with Blackwell support)
+    cutlass_url = "https://github.com/NVIDIA/cutlass/archive/refs/tags/v3.5.1.zip"
+    
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = Path(tmpdir) / "cutlass.zip"
+            print(f"Downloading {cutlass_url}...")
+            urllib.request.urlretrieve(cutlass_url, zip_path)
+            
+            print("Extracting CUTLASS...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+            
+            # Move to final location
+            extracted_dir = Path(tmpdir) / "cutlass-3.5.1"
+            shutil.move(str(extracted_dir), str(cutlass_dir))
+            
+        print(f"CUTLASS downloaded to {cutlass_dir}")
+        return cutlass_dir
+        
+    except Exception as e:
+        print(f"Warning: Failed to download CUTLASS: {e}")
+        print("CUTLASS kernels will not be available.")
+        print("You can manually install CUTLASS or use: pip install nvidia-cutlass")
+        return None
 
 
 class BuildFMHABridge:
@@ -80,6 +122,9 @@ class CustomBuildExt(cpp_extension.BuildExtension):
     """Custom build extension to also build FMHA bridge"""
     
     def run(self):
+        # Download CUTLASS if needed
+        cutlass_dir = download_cutlass()
+        
         # Build FMHA bridge first
         bridge_path = BuildFMHABridge.build()
         
@@ -128,7 +173,14 @@ def detect_gpu():
 # Get paths
 ROOT_DIR = Path(__file__).parent
 CSRC_DIR = ROOT_DIR / "csrc"
+
+# Ensure CUTLASS is available (download if needed for source installs)
 LOCAL_CUTLASS = ROOT_DIR / "third_party" / "cutlass"
+if not LOCAL_CUTLASS.exists():
+    # Try to download CUTLASS for source installations
+    # This won't run for pip install git+https:// but that's OK
+    # because nvidia-cutlass will be installed as a dependency
+    LOCAL_CUTLASS = download_cutlass() or LOCAL_CUTLASS
 
 # Check for CUDA
 if not torch.cuda.is_available():
@@ -165,12 +217,20 @@ sources = cpp_sources + cuda_sources
 # Include directories
 include_dirs = [
     str(CSRC_DIR),
-    str(LOCAL_CUTLASS / "include"),
-    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
-    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
-    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
-    str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
 ]
+
+# Add CUTLASS include paths if available
+if LOCAL_CUTLASS.exists():
+    include_dirs.extend([
+        str(LOCAL_CUTLASS / "include"),
+        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha"),
+        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/collective"),
+        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/device"),
+        str(LOCAL_CUTLASS / "examples/77_blackwell_fmha/kernel"),
+    ])
+else:
+    print("Warning: CUTLASS include directories not found. Some features may be limited.")
+
 include_dirs.extend(cpp_extension.include_paths())
 
 # Libraries
